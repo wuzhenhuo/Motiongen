@@ -1,6 +1,6 @@
 import { Canvas, useThree, useFrame } from '@react-three/fiber';
 import { OrbitControls, Environment, Grid, Html } from '@react-three/drei';
-import { Suspense, useEffect, useState, useRef, useMemo, useCallback } from 'react';
+import { Suspense, useEffect, useState, useRef, useMemo, useCallback, forwardRef, useImperativeHandle } from 'react';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import * as THREE from 'three';
@@ -114,14 +114,14 @@ function Model({ url, fileType = 'gltf', externalClips, savedPositionRef, mixerR
 }
 
 // ── AnimPanel ──────────────────────────────────────────────────
-function AnimPanel({ onClipsChange, onNewItemsLoaded }) {
+const AnimPanel = forwardRef(function AnimPanel({ onClipsChange, onNewItemsLoaded }, ref) {
   const [isDragOver, setIsDragOver] = useState(false);
   const [clipItems, setClipItems] = useState([]);
   const [activeId, setActiveId] = useState(null);
   const [loadError, setLoadError] = useState(null);
   const [loading, setLoading] = useState(false);
 
-  const loadAnimFile = useCallback(async (file) => {
+  const loadAnimFile = useCallback(async (file, { skipTimeline = false } = {}) => {
     setLoadError(null);
     setLoading(true);
     const ext = file.name.split('.').pop().toLowerCase();
@@ -155,7 +155,7 @@ function AnimPanel({ onClipsChange, onNewItemsLoaded }) {
       setClipItems(prev => [...prev, ...newItems]);
       setActiveId(newItems[0].id);
       onClipsChange([newItems[0].clip]);
-      onNewItemsLoaded?.(newItems);
+      if (!skipTimeline) onNewItemsLoaded?.(newItems);
     } catch (err) {
       console.error('Animation load error:', err);
       setLoadError('加载失败');
@@ -182,6 +182,21 @@ function AnimPanel({ onClipsChange, onNewItemsLoaded }) {
     if (activeId === id || activeId === 'all') { setActiveId(null); onClipsChange(null); }
   }, [activeId, onClipsChange]);
   const clearAll = useCallback(() => { setClipItems([]); setActiveId(null); onClipsChange(null); }, [onClipsChange]);
+
+  useImperativeHandle(ref, () => ({
+    addFile: (file) => loadAnimFile(file),
+    addFileExternal: (file) => loadAnimFile(file, { skipTimeline: true }),
+    removeByFileName: (name) => {
+      const toRemoveIds = new Set(clipItems.filter(c => c.fileName === name).map(c => c.id));
+      if (toRemoveIds.size === 0) return;
+      const remaining = clipItems.filter(c => !toRemoveIds.has(c.id));
+      setClipItems(remaining);
+      if (toRemoveIds.has(activeId) || activeId === 'all') {
+        onClipsChange(remaining.length > 0 ? remaining.map(c => c.clip) : null);
+        setActiveId(null);
+      }
+    },
+  }), [loadAnimFile, clipItems, activeId, onClipsChange]);
 
   return (
     <div className="w-44 flex-shrink-0 border-r border-gray-800 bg-gray-900/60 flex flex-col overflow-hidden">
@@ -237,7 +252,7 @@ function AnimPanel({ onClipsChange, onNewItemsLoaded }) {
       </div>
     </div>
   );
-}
+});
 
 // ── Timeline ───────────────────────────────────────────────────
 const TRACK_COLORS = [
@@ -246,7 +261,7 @@ const TRACK_COLORS = [
   { clip: 'bg-teal-700/80 hover:bg-teal-600/90 border-teal-500/40', track: 'bg-teal-950/10' },
 ];
 
-function Timeline({ items, onItemsChange, mixerRef }) {
+function Timeline({ items, onItemsChange, mixerRef, onPlayStart, onStop }) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [draggingId, setDraggingId] = useState(null);
@@ -271,18 +286,21 @@ function Timeline({ items, onItemsChange, mixerRef }) {
     });
     setCurrentTime(0);
     setIsPlaying(true);
-  }, [items, mixerRef]);
+    onPlayStart?.();
+  }, [items, mixerRef, onPlayStart]);
 
   const pause = useCallback(() => {
     if (mixerRef.current) mixerRef.current.timeScale = 0;
     cancelAnimationFrame(rafRef.current);
     setIsPlaying(false);
-  }, [mixerRef]);
+    onStop?.();
+  }, [mixerRef, onStop]);
 
   const resume = useCallback(() => {
     if (mixerRef.current) mixerRef.current.timeScale = 1;
     setIsPlaying(true);
-  }, [mixerRef]);
+    onPlayStart?.();
+  }, [mixerRef, onPlayStart]);
 
   const stop = useCallback(() => {
     cancelAnimationFrame(rafRef.current);
@@ -293,7 +311,8 @@ function Timeline({ items, onItemsChange, mixerRef }) {
     }
     setCurrentTime(0);
     setIsPlaying(false);
-  }, [mixerRef]);
+    onStop?.();
+  }, [mixerRef, onStop]);
 
   useEffect(() => {
     if (!isPlaying) return;
@@ -479,7 +498,7 @@ function Lights() {
 }
 
 // ── ModelViewer ───────────────────────────────────────────────
-export default function ModelViewer({ modelUrl, label, fileType = 'gltf' }) {
+const ModelViewer = forwardRef(function ModelViewer({ modelUrl, label, fileType = 'gltf', onActionPlayStart, onActionStop }, ref) {
   const [autoRotate, setAutoRotate] = useState(true);
   const [showGrid, setShowGrid] = useState(true);
   const [viewMode, setViewMode] = useState('standard');
@@ -493,6 +512,22 @@ export default function ModelViewer({ modelUrl, label, fileType = 'gltf' }) {
   const sceneRef = useRef(null);
   const savedPositionRef = useRef(null);
   const mixerRef = useRef(null); // lifted — shared with Timeline
+  const animPanelRef = useRef(null);
+
+  useImperativeHandle(ref, () => ({
+    playAnimation() {
+      if (mixerRef.current) mixerRef.current.timeScale = 1;
+    },
+    stopAnimation() {
+      if (mixerRef.current) mixerRef.current.timeScale = 0;
+    },
+    loadAnimFile(file) {
+      animPanelRef.current?.addFileExternal(file);
+    },
+    removeAnimByFileName(name) {
+      animPanelRef.current?.removeByFileName(name);
+    },
+  }));
 
   const proxiedUrl = useMemo(() => modelUrl, [modelUrl]);
 
@@ -520,7 +555,19 @@ export default function ModelViewer({ modelUrl, label, fileType = 'gltf' }) {
     });
   }, []);
 
-  if (!modelUrl) return null;
+  if (!modelUrl) {
+    return (
+      <div className="flex h-full">
+        {showAnimPanel && (
+          <AnimPanel
+            ref={animPanelRef}
+            onClipsChange={setExternalClips}
+            onNewItemsLoaded={handleNewItemsLoaded}
+          />
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col h-full">
@@ -574,6 +621,7 @@ export default function ModelViewer({ modelUrl, label, fileType = 'gltf' }) {
       <div className="flex-1 flex overflow-hidden bg-gray-950 min-h-0">
         {showAnimPanel && (
           <AnimPanel
+            ref={animPanelRef}
             onClipsChange={setExternalClips}
             onNewItemsLoaded={handleNewItemsLoaded}
           />
@@ -619,8 +667,12 @@ export default function ModelViewer({ modelUrl, label, fileType = 'gltf' }) {
           items={timelineItems}
           onItemsChange={setTimelineItems}
           mixerRef={mixerRef}
+          onPlayStart={onActionPlayStart}
+          onStop={onActionStop}
         />
       )}
     </div>
   );
-}
+});
+
+export default ModelViewer;

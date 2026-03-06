@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback, useEffect, forwardRef, useImperativeHandle } from 'react';
 
 const PX_PER_SEC = 50;
 const TOTAL_SECS = 120;
@@ -33,9 +33,9 @@ const MUSIC_COLORS = [
 // Time ruler markers every 5 seconds
 const MARKERS = Array.from({ length: Math.floor(TOTAL_SECS / 5) + 1 }, (_, i) => i * 5);
 
-function TrackRow({ track, colorClass, onMouseDown, onDelete, icon }) {
+function TrackRow({ track, colorClass, onMouseDown, onDelete, icon, isSelected, onSelect }) {
   return (
-    <div className="relative flex items-center" style={{ height: TRACK_H }}>
+    <div className="relative flex items-center group/row" style={{ height: TRACK_H }}>
       {/* Label column */}
       <div
         style={{ width: RULER_OFFSET }}
@@ -48,28 +48,32 @@ function TrackRow({ track, colorClass, onMouseDown, onDelete, icon }) {
         >
           {track.name.replace(/\.[^.]+$/, '')}
         </span>
-        <button
-          onClick={() => onDelete(track.id)}
-          className="text-gray-700 hover:text-gray-400 transition flex-shrink-0"
-          title="删除"
-        >
-          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-          </svg>
-        </button>
       </div>
 
       {/* Clip block */}
       <div
-        onMouseDown={(e) => onMouseDown(e, track.id)}
+        onMouseDown={(e) => { onSelect(); onMouseDown(e, track.id); }}
+        onClick={(e) => e.stopPropagation()}
         style={{
           position: 'absolute',
           height: TRACK_H - 10,
           left: RULER_OFFSET + track.offset * PX_PER_SEC,
           width: Math.max(track.duration * PX_PER_SEC, 48),
         }}
-        className={`rounded border cursor-grab active:cursor-grabbing flex items-center px-2 select-none overflow-hidden ${colorClass}`}
+        className={`rounded border cursor-grab active:cursor-grabbing flex items-center px-2 select-none overflow-visible ${colorClass} ${isSelected ? 'ring-2 ring-white/70' : ''}`}
       >
+        {/* Delete button — visible on hover or when selected */}
+        <button
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => { e.stopPropagation(); onDelete(track.id); }}
+          className={`absolute -top-1.5 -left-1.5 w-4 h-4 rounded-full bg-gray-900 border border-gray-600 flex items-center justify-center text-gray-300 hover:bg-red-600 hover:border-red-500 hover:text-white transition z-20 ${isSelected ? 'opacity-100' : 'opacity-0 group-hover/row:opacity-100'}`}
+          title="删除 (Delete)"
+        >
+          <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+
         <span className="text-[11px] text-white/90 truncate flex-1">
           {track.name.replace(/\.[^.]+$/, '')}
         </span>
@@ -81,25 +85,76 @@ function TrackRow({ track, colorClass, onMouseDown, onDelete, icon }) {
   );
 }
 
-export default function MusicTimeline({ actionTracks = [], onActionTracksChange }) {
+const MusicTimeline = forwardRef(function MusicTimeline({ actionTracks = [], onActionTracksChange, onPlayStart, onPlayStop, onAnimFileLoad, onPreviewModel, onActionDelete }, ref) {
   const [musicTracks, setMusicTracks] = useState([]);
   const [isPlaying, setIsPlaying] = useState(false);
   const [playhead, setPlayhead] = useState(0);
+  // { id, type: 'action' | 'music' } | null
+  const [selected, setSelected] = useState(null);
 
   const fileInputRef = useRef(null);
+  const actionFileInputRef = useRef(null);
   const audioEls = useRef({});
   const rafRef = useRef(null);
   const playStartWall = useRef(0);
   const playStartHead = useRef(0);
   const pendingTimers = useRef([]);
-  // dragRef: { trackId, type ('action'|'music'), startX, startOffset }
   const dragRef = useRef(null);
   const timelineRef = useRef(null);
+  // Keep callbacks in refs to avoid stale closures
+  const onPlayStartRef = useRef(onPlayStart);
+  const onPlayStopRef = useRef(onPlayStop);
+  useEffect(() => { onPlayStartRef.current = onPlayStart; }, [onPlayStart]);
+  useEffect(() => { onPlayStopRef.current = onPlayStop; }, [onPlayStop]);
+
+  // Undo history
+  const historyRef = useRef([]);
+  const actionTracksRef = useRef(actionTracks);
+  const musicTracksRef = useRef(musicTracks);
+  useEffect(() => { actionTracksRef.current = actionTracks; }, [actionTracks]);
+  useEffect(() => { musicTracksRef.current = musicTracks; }, [musicTracks]);
+
+  const saveSnapshot = useCallback(() => {
+    historyRef.current = [
+      ...historyRef.current.slice(-19),
+      { actionTracks: actionTracksRef.current, musicTracks: musicTracksRef.current },
+    ];
+  }, []);
+
+  const undo = useCallback(() => {
+    if (historyRef.current.length === 0) return;
+    const prev = historyRef.current[historyRef.current.length - 1];
+    historyRef.current = historyRef.current.slice(0, -1);
+    onActionTracksChange?.(prev.actionTracks);
+    setMusicTracks(prev.musicTracks);
+    setSelected(null);
+  }, [onActionTracksChange]);
+
+  // Upload action file
+  const handleActionUpload = useCallback((e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    saveSnapshot();
+    const ext = file.name.split('.').pop().toLowerCase();
+    const url = URL.createObjectURL(file);
+    onActionTracksChange?.(prev => [...prev, {
+      id: Date.now(),
+      name: file.name,
+      duration: 8,
+      offset: 0,
+      fileType: ext,
+      colorIdx: prev.length,
+    }]);
+    onAnimFileLoad?.(file);
+    onPreviewModel?.(url, file.name, ext);
+    e.target.value = '';
+  }, [saveSnapshot, onActionTracksChange, onAnimFileLoad, onPreviewModel]);
 
   // Upload music
   const handleUpload = useCallback((e) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    saveSnapshot();
     const url = URL.createObjectURL(file);
     const audio = new Audio(url);
     const id = Date.now();
@@ -123,6 +178,7 @@ export default function MusicTimeline({ actionTracks = [], onActionTracksChange 
     cancelAnimationFrame(rafRef.current);
     Object.values(audioEls.current).forEach(a => { try { a.pause(); } catch {} });
     setIsPlaying(false);
+    onPlayStopRef.current?.();
   }, []);
 
   // Play / pause — drives both music and action tracks
@@ -169,6 +225,7 @@ export default function MusicTimeline({ actionTracks = [], onActionTracksChange 
     };
     rafRef.current = requestAnimationFrame(tick);
     setIsPlaying(true);
+    onPlayStartRef.current?.();
   }, [isPlaying, playhead, musicTracks, actionTracks, stopPlayback]);
 
   const handleStop = useCallback(() => {
@@ -178,14 +235,38 @@ export default function MusicTimeline({ actionTracks = [], onActionTracksChange 
 
   // Delete handlers
   const handleDeleteMusic = useCallback((id) => {
+    saveSnapshot();
     const audio = audioEls.current[id];
     if (audio) { audio.pause(); delete audioEls.current[id]; }
     setMusicTracks(prev => prev.filter(t => t.id !== id));
-  }, []);
+    setSelected(s => s?.id === id ? null : s);
+  }, [saveSnapshot]);
 
   const handleDeleteAction = useCallback((id) => {
+    saveSnapshot();
+    const track = actionTracksRef.current.find(t => t.id === id);
+    if (track) onActionDelete?.(track);
     onActionTracksChange?.(prev => prev.filter(t => t.id !== id));
-  }, [onActionTracksChange]);
+    setSelected(s => s?.id === id ? null : s);
+  }, [saveSnapshot, onActionTracksChange, onActionDelete]);
+
+  // Keyboard shortcuts: Delete to remove selected track, Ctrl+Z to undo
+  useEffect(() => {
+    const onKeyDown = (e) => {
+      if (['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName)) return;
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+        e.preventDefault();
+        undo();
+        return;
+      }
+      if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+      if (!selected) return;
+      if (selected.type === 'action') handleDeleteAction(selected.id);
+      else handleDeleteMusic(selected.id);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [selected, handleDeleteAction, handleDeleteMusic, undo]);
 
   // Mouse drag
   const onClipMouseDown = useCallback((e, trackId, type) => {
@@ -193,8 +274,9 @@ export default function MusicTimeline({ actionTracks = [], onActionTracksChange 
     const tracks = type === 'action' ? actionTracks : musicTracks;
     const track = tracks.find(t => t.id === trackId);
     if (!track) return;
+    saveSnapshot();
     dragRef.current = { trackId, type, startX: e.clientX, startOffset: track.offset };
-  }, [actionTracks, musicTracks]);
+  }, [actionTracks, musicTracks, saveSnapshot]);
 
   const onMouseMove = useCallback((e) => {
     if (!dragRef.current) return;
@@ -233,6 +315,15 @@ export default function MusicTimeline({ actionTracks = [], onActionTracksChange 
       Object.values(audioEls.current).forEach(a => { try { URL.revokeObjectURL(a.src); } catch {} });
     };
   }, [stopPlayback]);
+
+  useImperativeHandle(ref, () => ({
+    startPlay() {
+      if (!isPlaying) handlePlayPause();
+    },
+    stopPlay() {
+      if (isPlaying) stopPlayback();
+    },
+  }), [isPlaying, handlePlayPause, stopPlayback]);
 
   const totalTracks = actionTracks.length + musicTracks.length;
   const timelineHeight = totalTracks === 0 ? 36 : totalTracks * TRACK_H;
@@ -294,6 +385,21 @@ export default function MusicTimeline({ actionTracks = [], onActionTracksChange 
 
         <div className="flex-1" />
 
+        {/* Upload action button */}
+        <button
+          onClick={() => actionFileInputRef.current?.click()}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-gray-800 hover:bg-gray-700 border border-gray-700/50 rounded-lg text-orange-400 hover:text-orange-300 transition"
+        >
+          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+              d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+              d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          上传动作
+        </button>
+        <input ref={actionFileInputRef} type="file" accept=".glb,.gltf,.fbx" className="hidden" onChange={handleActionUpload} />
+
         {/* Upload music button */}
         <button
           onClick={() => fileInputRef.current?.click()}
@@ -308,7 +414,7 @@ export default function MusicTimeline({ actionTracks = [], onActionTracksChange 
       </div>
 
       {/* Timeline scroll area */}
-      <div ref={timelineRef} className="overflow-x-auto overflow-y-hidden">
+      <div ref={timelineRef} className="overflow-x-auto">
         <div style={{ width: RULER_OFFSET + TOTAL_SECS * PX_PER_SEC + 32, position: 'relative' }}>
 
           {/* Time ruler */}
@@ -344,7 +450,7 @@ export default function MusicTimeline({ actionTracks = [], onActionTracksChange 
           </div>
 
           {/* Track area */}
-          <div className="relative" style={{ height: timelineHeight }}>
+          <div className="relative" style={{ height: timelineHeight }} onClick={() => setSelected(null)}>
 
             {/* Playhead line across all tracks */}
             <div
@@ -372,6 +478,8 @@ export default function MusicTimeline({ actionTracks = [], onActionTracksChange 
                   onMouseDown={(e, id) => onClipMouseDown(e, id, 'action')}
                   onDelete={handleDeleteAction}
                   icon={ActionIcon}
+                  isSelected={selected?.id === track.id}
+                  onSelect={() => setSelected({ id: track.id, type: 'action' })}
                 />
               </div>
             ))}
@@ -396,6 +504,8 @@ export default function MusicTimeline({ actionTracks = [], onActionTracksChange 
                   onMouseDown={(e, id) => onClipMouseDown(e, id, 'music')}
                   onDelete={handleDeleteMusic}
                   icon={MusicIcon}
+                  isSelected={selected?.id === track.id}
+                  onSelect={() => setSelected({ id: track.id, type: 'music' })}
                 />
               </div>
             ))}
@@ -411,4 +521,6 @@ export default function MusicTimeline({ actionTracks = [], onActionTracksChange 
       </div>
     </div>
   );
-}
+});
+
+export default MusicTimeline;
