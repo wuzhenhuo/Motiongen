@@ -2,5 +2,15 @@
   "build": {
     "command": "npm install --prefix client && npm run build --prefix client",
     "output": "client/dist"
-  }
+  },
+  "routes": [
+    {
+      "src": "/api/(.*)",
+      "status": 404
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/index.html"
+    }
+  ]
 }
