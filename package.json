@@ -1,0 +1,13 @@
+{
+  "name": "wuzhen-studio",
+  "version": "1.0.0",
+  "description": "3D Model Generation + HY-Motion — WuZhen Studio",
+  "private": true,
+  "scripts": {
+    "dev": "npm run dev --prefix server & npm run dev --prefix client",
+    "dev:server": "npm run dev --prefix server",
+    "dev:client": "npm run dev --prefix client",
+    "build": "npm run build --prefix client",
+    "motion": "cd motion && python3 app.py"
+  }
+}

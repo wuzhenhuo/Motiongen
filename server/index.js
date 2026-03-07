@@ -2,6 +2,7 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import tripoRoutes from './routes/tripo.js';
+import hymotionRoutes from './routes/hymotion.js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -12,6 +13,7 @@ app.use('/uploads', express.static('uploads'));
 
 // Routes
 app.use('/api/tripo', tripoRoutes);
+app.use('/api/hymotion', hymotionRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {

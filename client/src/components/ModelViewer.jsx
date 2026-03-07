@@ -555,69 +555,57 @@ const ModelViewer = forwardRef(function ModelViewer({ modelUrl, label, fileType 
     });
   }, []);
 
-  if (!modelUrl) {
-    return (
-      <div className="flex h-full">
-        {showAnimPanel && (
-          <AnimPanel
-            ref={animPanelRef}
-            onClipsChange={setExternalClips}
-            onNewItemsLoaded={handleNewItemsLoaded}
-          />
-        )}
-      </div>
-    );
-  }
-
   return (
     <div className="flex flex-col h-full">
-      {/* Toolbar */}
-      <div className="flex-shrink-0 flex items-center justify-between px-4 py-2 border-b border-gray-800 bg-gray-900/60">
-        <div className="flex items-center gap-2 flex-wrap">
-          {label && (
-            <span className="text-xs text-indigo-400 font-medium px-2 py-0.5 rounded bg-indigo-500/10 border border-indigo-500/20">
-              {label}
-            </span>
-          )}
-          {hasAnimation && (
-            <span className="text-xs text-emerald-400 font-medium px-2 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/20 animate-pulse">
-              ▶ 动画播放中
-            </span>
-          )}
-          {[
-            { label: '自动旋转', active: autoRotate, onClick: () => setAutoRotate(v => !v) },
-            { label: '网格', active: showGrid, onClick: () => setShowGrid(v => !v) },
-            { label: '动作面板', active: showAnimPanel, onClick: () => setShowAnimPanel(v => !v) },
-            { label: '时间线', active: showTimeline, onClick: () => setShowTimeline(v => !v) },
-          ].map(btn => (
-            <button key={btn.label} onClick={btn.onClick}
-              className={`px-3 py-1 text-xs rounded-md transition ${btn.active ? 'bg-indigo-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-white'}`}>
-              {btn.label}
+      {/* Toolbar — only when a model is loaded */}
+      {modelUrl && (
+        <div className="flex-shrink-0 flex items-center justify-between px-4 py-2 border-b border-gray-800 bg-gray-900/60">
+          <div className="flex items-center gap-2 flex-wrap">
+            {label && (
+              <span className="text-xs text-indigo-400 font-medium px-2 py-0.5 rounded bg-indigo-500/10 border border-indigo-500/20">
+                {label}
+              </span>
+            )}
+            {hasAnimation && (
+              <span className="text-xs text-emerald-400 font-medium px-2 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/20 animate-pulse">
+                ▶ 动画播放中
+              </span>
+            )}
+            {[
+              { label: '自动旋转', active: autoRotate, onClick: () => setAutoRotate(v => !v) },
+              { label: '网格', active: showGrid, onClick: () => setShowGrid(v => !v) },
+              { label: '动作面板', active: showAnimPanel, onClick: () => setShowAnimPanel(v => !v) },
+              { label: '时间线', active: showTimeline, onClick: () => setShowTimeline(v => !v) },
+            ].map(btn => (
+              <button key={btn.label} onClick={btn.onClick}
+                className={`px-3 py-1 text-xs rounded-md transition ${btn.active ? 'bg-indigo-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-white'}`}>
+                {btn.label}
+              </button>
+            ))}
+            <button
+              onClick={() => {
+                if (sceneRef.current) {
+                  sceneRef.current.position.set(0, 0, 0);
+                  savedPositionRef.current = { x: 0, y: 0, z: 0 };
+                  setPositionSaved(true);
+                }
+              }}
+              className={`px-3 py-1 text-xs rounded-md transition ${positionSaved ? 'bg-amber-700/60 text-amber-300' : 'bg-gray-800 text-gray-400 hover:text-white'}`}>
+              {positionSaved ? '坐标已保存' : '重置坐标'}
             </button>
-          ))}
-          <button
-            onClick={() => {
-              if (sceneRef.current) {
-                sceneRef.current.position.set(0, 0, 0);
-                savedPositionRef.current = { x: 0, y: 0, z: 0 };
-                setPositionSaved(true);
-              }
-            }}
-            className={`px-3 py-1 text-xs rounded-md transition ${positionSaved ? 'bg-amber-700/60 text-amber-300' : 'bg-gray-800 text-gray-400 hover:text-white'}`}>
-            {positionSaved ? '坐标已保存' : '重置坐标'}
-          </button>
+          </div>
+          <div className="flex gap-1 bg-gray-800 rounded-md p-0.5 flex-shrink-0">
+            {[['standard', '实体'], ['wireframe', '线框']].map(([mode, label]) => (
+              <button key={mode} onClick={() => setViewMode(mode)}
+                className={`px-3 py-1 text-xs rounded transition ${viewMode === mode ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:text-white'}`}>
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
-        <div className="flex gap-1 bg-gray-800 rounded-md p-0.5 flex-shrink-0">
-          {[['standard', '实体'], ['wireframe', '线框']].map(([mode, label]) => (
-            <button key={mode} onClick={() => setViewMode(mode)}
-              className={`px-3 py-1 text-xs rounded transition ${viewMode === mode ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:text-white'}`}>
-              {label}
-            </button>
-          ))}
-        </div>
-      </div>
+      )}
 
-      {/* Canvas row: optional anim panel + 3D canvas */}
+      {/* Canvas row: AnimPanel always mounted + 3D canvas when model loaded */}
       <div className="flex-1 flex overflow-hidden bg-gray-950 min-h-0">
         {showAnimPanel && (
           <AnimPanel
@@ -626,39 +614,41 @@ const ModelViewer = forwardRef(function ModelViewer({ modelUrl, label, fileType 
             onNewItemsLoaded={handleNewItemsLoaded}
           />
         )}
-        <div className="flex-1 relative overflow-hidden">
-          <Canvas
-            camera={{ position: [3, 2, 3], fov: 45, near: 0.01, far: 1000 }}
-            gl={{ antialias: true, toneMapping: THREE.ACESFilmicToneMapping, toneMappingExposure: 1.2 }}
-          >
-            <Suspense fallback={null}>
-              <Lights />
-              <Environment preset="city" />
-              {showGrid && (
-                <Grid args={[10, 10]} cellSize={0.5} cellThickness={0.5} cellColor="#1e293b"
-                  sectionSize={2} sectionThickness={1} sectionColor="#334155"
-                  fadeDistance={10} fadeStrength={1} position={[0, -0.01, 0]} />
-              )}
-              <Model
-                url={proxiedUrl}
-                fileType={fileType}
-                externalClips={externalClips}
-                savedPositionRef={savedPositionRef}
-                mixerRef={mixerRef}
-                onLoaded={() => setLoaded(true)}
-                onHasAnimation={setHasAnimation}
-                onSceneMount={(s) => { sceneRef.current = s; }}
-              />
-              <OrbitControls autoRotate={autoRotate} autoRotateSpeed={hasAnimation ? 0.5 : 2}
-                enableDamping dampingFactor={0.05} minDistance={0.5} maxDistance={20} />
-            </Suspense>
-          </Canvas>
-          {loaded && (
-            <div className="absolute bottom-3 left-1/2 -translate-x-1/2 text-xs text-gray-500 bg-gray-900/80 px-3 py-1 rounded-full pointer-events-none whitespace-nowrap">
-              左键拖拽旋转 · 滚轮缩放 · 右键平移
-            </div>
-          )}
-        </div>
+        {modelUrl && (
+          <div className="flex-1 relative overflow-hidden">
+            <Canvas
+              camera={{ position: [3, 2, 3], fov: 45, near: 0.01, far: 1000 }}
+              gl={{ antialias: true, toneMapping: THREE.ACESFilmicToneMapping, toneMappingExposure: 1.2 }}
+            >
+              <Suspense fallback={null}>
+                <Lights />
+                <Environment preset="city" />
+                {showGrid && (
+                  <Grid args={[10, 10]} cellSize={0.5} cellThickness={0.5} cellColor="#1e293b"
+                    sectionSize={2} sectionThickness={1} sectionColor="#334155"
+                    fadeDistance={10} fadeStrength={1} position={[0, -0.01, 0]} />
+                )}
+                <Model
+                  url={proxiedUrl}
+                  fileType={fileType}
+                  externalClips={externalClips}
+                  savedPositionRef={savedPositionRef}
+                  mixerRef={mixerRef}
+                  onLoaded={() => setLoaded(true)}
+                  onHasAnimation={setHasAnimation}
+                  onSceneMount={(s) => { sceneRef.current = s; }}
+                />
+                <OrbitControls autoRotate={autoRotate} autoRotateSpeed={hasAnimation ? 0.5 : 2}
+                  enableDamping dampingFactor={0.05} minDistance={0.5} maxDistance={20} />
+              </Suspense>
+            </Canvas>
+            {loaded && (
+              <div className="absolute bottom-3 left-1/2 -translate-x-1/2 text-xs text-gray-500 bg-gray-900/80 px-3 py-1 rounded-full pointer-events-none whitespace-nowrap">
+                左键拖拽旋转 · 滚轮缩放 · 右键平移
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Timeline — shown when toggled on and there are items */}

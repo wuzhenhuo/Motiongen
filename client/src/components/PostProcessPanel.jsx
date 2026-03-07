@@ -73,40 +73,6 @@ function PreviewBtn({ url, label, onPreview }) {
   );
 }
 
-// ── Tab: 部件拆分 (segment_mesh — Studio-only) ────────────────
-
-function SegmentTab() {
-  return (
-    <div className="space-y-3">
-      <p className="text-xs text-gray-400 leading-relaxed">
-        将模型自动分解为可独立编辑的零部件，便于局部调整和装配。
-      </p>
-      <div className="flex items-start gap-3 p-3 rounded-lg bg-yellow-950/40 border border-yellow-800/40">
-        <svg className="w-4 h-4 text-yellow-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-            d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-        </svg>
-        <div className="space-y-1">
-          <p className="text-xs text-yellow-400 font-medium">此功能需要 Tripo Studio</p>
-          <p className="text-xs text-gray-500">部件拆分（segment_mesh）暂未开放公开 API 访问，请前往 Tripo Studio 使用。</p>
-          <a
-            href="https://studio.tripo3d.ai/workspace/segmentation"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 text-xs text-indigo-400 hover:text-indigo-300 transition"
-          >
-            打开 Tripo Studio 分割工作台
-            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-            </svg>
-          </a>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ── Tab: 重拓扑 (convert_model — export clean topology) ───────
 
 function RetopoTab({ taskId, onPreview }) {
@@ -323,14 +289,13 @@ function AnimateTab({ taskId, onPreview }) {
 // ── Main Panel ────────────────────────────────────────────────
 
 const TABS = [
-  { id: 'segment', label: '部件拆分' },
   { id: 'retopo',  label: '格式导出' },
   { id: 'texture', label: '纹理生成' },
   { id: 'animate', label: '动画绑定' },
 ];
 
 export default function PostProcessPanel({ taskId, onPreview }) {
-  const [activeTab, setActiveTab] = useState('segment');
+  const [activeTab, setActiveTab] = useState('retopo');
 
   return (
     <div className="flex-shrink-0 border-t border-gray-800 bg-gray-900/80 backdrop-blur">
@@ -353,7 +318,6 @@ export default function PostProcessPanel({ taskId, onPreview }) {
 
       {/* Tab content */}
       <div className="p-4 min-h-[130px] max-h-[210px] overflow-y-auto">
-        {activeTab === 'segment' && <SegmentTab />}
         {activeTab === 'retopo'  && <RetopoTab  taskId={taskId} onPreview={onPreview} />}
         {activeTab === 'texture' && <TextureTab  taskId={taskId} onPreview={onPreview} />}
         {activeTab === 'animate' && <AnimateTab  taskId={taskId} onPreview={onPreview} />}

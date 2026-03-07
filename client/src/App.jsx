@@ -2,9 +2,10 @@ import { useCallback, useRef, useState } from 'react';
 import PromptInput from './components/PromptInput.jsx';
 import ProgressBar from './components/ProgressBar.jsx';
 import ModelViewer from './components/ModelViewer.jsx';
-import History, { saveToHistory } from './components/History.jsx';
+import { saveToHistory } from './components/History.jsx';
 import PostProcessPanel from './components/PostProcessPanel.jsx';
 import MusicTimeline from './components/MusicTimeline.jsx';
+import HyMotionPage from './components/HyMotionPage.jsx';
 import { useTaskPolling } from './hooks/useTaskPolling.js';
 import { getDownloadUrl } from './utils/api.js';
 
@@ -38,7 +39,7 @@ export default function App() {
   const { status, progress, result, error, generate, reset } = useTaskPolling();
   const isGenerating = ['uploading', 'queued', 'running'].includes(status);
 
-  const [page, setPage] = useState('generate'); // 'generate' | 'animate'
+  const [page, setPage] = useState('generate'); // 'generate' | 'animate' | 'motion'
   const [pipelinePreview, setPipelinePreview] = useState(null);
   const localFileInputRef = useRef(null);
   const localObjectUrlRef = useRef(null);
@@ -140,6 +141,16 @@ export default function App() {
             >
               动作编辑
             </button>
+            <button
+              onClick={() => setPage('motion')}
+              className={`px-4 py-1.5 text-xs font-medium rounded-md transition ${
+                page === 'motion'
+                  ? 'bg-purple-600 text-white shadow'
+                  : 'text-gray-400 hover:text-white'
+              }`}
+            >
+              动作生成
+            </button>
           </div>
 
           {/* Right actions */}
@@ -169,8 +180,15 @@ export default function App() {
         </div>
       </header>
 
+      {/* ── HY-Motion page (full body replacement) ─────── */}
+      {page === 'motion' && (
+        <div className="flex flex-1 overflow-hidden">
+          <HyMotionPage />
+        </div>
+      )}
+
       {/* ── Body ───────────────────────────────────────── */}
-      <div className="flex flex-1 overflow-hidden">
+      <div className={`flex flex-1 overflow-hidden ${page === 'motion' ? 'hidden' : ''}`}>
 
         {/* ── Sidebar — only on generate page ──────────── */}
         {page === 'generate' && (
@@ -193,10 +211,6 @@ export default function App() {
               )}
             </div>
 
-            {/* History pinned at bottom */}
-            <div className="flex-shrink-0 border-t border-gray-800 p-4">
-              <History />
-            </div>
           </aside>
         )}
 
