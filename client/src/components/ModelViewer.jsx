@@ -114,7 +114,7 @@ function Model({ url, fileType = 'gltf', externalClips, savedPositionRef, mixerR
 }
 
 // ── AnimPanel ──────────────────────────────────────────────────
-const AnimPanel = forwardRef(function AnimPanel({ onClipsChange, onNewItemsLoaded }, ref) {
+const AnimPanel = forwardRef(function AnimPanel({ onClipsChange, onNewItemsLoaded, onPlayOnce }, ref) {
   const [clipItems, setClipItems] = useState([]);
   const [activeId, setActiveId] = useState(null);
   const [loadError, setLoadError] = useState(null);
@@ -154,7 +154,7 @@ const AnimPanel = forwardRef(function AnimPanel({ onClipsChange, onNewItemsLoade
       }));
       setClipItems(prev => [...prev, ...newItems]);
       setActiveId(newItems[0].id);
-      onClipsChange([newItems[0].clip]);
+      onPlayOnce?.([newItems[0].clip]);
       if (!skipTimeline) onNewItemsLoaded?.(newItems);
     } catch (err) {
       console.error('Animation load error:', err);
@@ -170,8 +170,8 @@ const AnimPanel = forwardRef(function AnimPanel({ onClipsChange, onNewItemsLoade
     e.target.value = '';
   }, [loadAnimFile]);
 
-const playClip = useCallback((item) => { setActiveId(item.id); onClipsChange([item.clip]); }, [onClipsChange]);
-  const playAll = useCallback((items) => { setActiveId('all'); onClipsChange(items.map(c => c.clip)); }, [onClipsChange]);
+const playClip = useCallback((item) => { setActiveId(item.id); onPlayOnce?.([item.clip]); }, [onPlayOnce]);
+  const playAll = useCallback((items) => { setActiveId('all'); onPlayOnce?.(items.map(c => c.clip)); }, [onPlayOnce]);
   const removeClip = useCallback((id, remaining) => {
     setClipItems(remaining);
     if (activeId === id || activeId === 'all') { setActiveId(null); onClipsChange(null); }
@@ -491,7 +491,8 @@ function Lights() {
 }
 
 // ── ModelViewer ───────────────────────────────────────────────
-const ModelViewer = forwardRef(function ModelViewer({ modelUrl, label, fileType = 'gltf', onActionPlayStart, onActionStop }, ref) {
+const ModelViewer = forwardRef(function ModelViewer({ modelUrl, label, fileType = 'gltf', page = 'animate', onActionPlayStart, onActionStop }, ref) {
+  const isGeneratePage = page === 'generate';
   const [autoRotate, setAutoRotate] = useState(true);
   const [showGrid, setShowGrid] = useState(true);
   const [viewMode, setViewMode] = useState('standard');
@@ -533,6 +534,18 @@ const ModelViewer = forwardRef(function ModelViewer({ modelUrl, label, fileType 
     savedPositionRef.current = null;
   }, [modelUrl]);
 
+  // Play clips once (LoopOnce) — used by AnimPanel click
+  const handlePlayOnce = useCallback((clips) => {
+    if (!mixerRef.current || !clips?.length) return;
+    mixerRef.current.stopAllAction();
+    clips.forEach(clip => {
+      const action = mixerRef.current.clipAction(clip);
+      action.setLoop(THREE.LoopOnce, 1);
+      action.clampWhenFinished = true;
+      action.reset().play();
+    });
+  }, []);
+
   // When AnimPanel loads new items → add to timeline on track 0
   const handleNewItemsLoaded = useCallback((newItems) => {
     if (!newItems) return;
@@ -567,8 +580,10 @@ const ModelViewer = forwardRef(function ModelViewer({ modelUrl, label, fileType 
             {[
               { label: '自动旋转', active: autoRotate, onClick: () => setAutoRotate(v => !v) },
               { label: '网格', active: showGrid, onClick: () => setShowGrid(v => !v) },
-              { label: '动作面板', active: showAnimPanel, onClick: () => setShowAnimPanel(v => !v) },
-              { label: '时间线', active: showTimeline, onClick: () => setShowTimeline(v => !v) },
+              ...(!isGeneratePage ? [
+                { label: '动作面板', active: showAnimPanel, onClick: () => setShowAnimPanel(v => !v) },
+                { label: '时间线', active: showTimeline, onClick: () => setShowTimeline(v => !v) },
+              ] : []),
             ].map(btn => (
               <button key={btn.label} onClick={btn.onClick}
                 className={`px-3 py-1 text-xs rounded-md transition ${btn.active ? 'bg-indigo-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-white'}`}>
@@ -598,13 +613,14 @@ const ModelViewer = forwardRef(function ModelViewer({ modelUrl, label, fileType 
         </div>
       )}
 
-      {/* Canvas row: AnimPanel always mounted + 3D canvas when model loaded */}
+      {/* Canvas row: AnimPanel (animate page only) + 3D canvas */}
       <div className="flex-1 flex overflow-hidden bg-gray-950 min-h-0">
-        {showAnimPanel && (
+        {!isGeneratePage && showAnimPanel && (
           <AnimPanel
             ref={animPanelRef}
             onClipsChange={setExternalClips}
             onNewItemsLoaded={handleNewItemsLoaded}
+            onPlayOnce={handlePlayOnce}
           />
         )}
         {modelUrl && (
@@ -644,8 +660,8 @@ const ModelViewer = forwardRef(function ModelViewer({ modelUrl, label, fileType 
         )}
       </div>
 
-      {/* Timeline — shown when toggled on and there are items */}
-      {showTimeline && timelineItems.length > 0 && (
+      {/* Timeline — animate page only */}
+      {!isGeneratePage && showTimeline && timelineItems.length > 0 && (
         <Timeline
           items={timelineItems}
           onItemsChange={setTimelineItems}

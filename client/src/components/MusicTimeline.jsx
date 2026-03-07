@@ -275,7 +275,7 @@ const MusicTimeline = forwardRef(function MusicTimeline({ actionTracks = [], onA
     const track = tracks.find(t => t.id === trackId);
     if (!track) return;
     saveSnapshot();
-    dragRef.current = { trackId, type, startX: e.clientX, startOffset: track.offset };
+    dragRef.current = { trackId, type, startX: e.clientX, startOffset: track.offset, lastY: e.clientY };
   }, [actionTracks, musicTracks, saveSnapshot]);
 
   const onMouseMove = useCallback((e) => {
@@ -283,10 +283,46 @@ const MusicTimeline = forwardRef(function MusicTimeline({ actionTracks = [], onA
     const { trackId, type, startX, startOffset } = dragRef.current;
     const dx = e.clientX - startX;
     const newOffset = Math.max(0, startOffset + dx / PX_PER_SEC);
+
+    const dy = e.clientY - dragRef.current.lastY;
+    const rowShift = Math.round(dy / TRACK_H);
+
     if (type === 'action') {
-      onActionTracksChange?.(prev => prev.map(t => t.id === trackId ? { ...t, offset: newOffset } : t));
+      if (rowShift !== 0) {
+        dragRef.current.lastY += rowShift * TRACK_H;
+        onActionTracksChange?.(prev => {
+          const arr = [...prev];
+          const fromIdx = arr.findIndex(t => t.id === trackId);
+          if (fromIdx === -1) return arr.map(t => t.id === trackId ? { ...t, offset: newOffset } : t);
+          const toIdx = Math.max(0, Math.min(arr.length - 1, fromIdx + rowShift));
+          arr[fromIdx] = { ...arr[fromIdx], offset: newOffset };
+          if (fromIdx !== toIdx) {
+            const [item] = arr.splice(fromIdx, 1);
+            arr.splice(toIdx, 0, item);
+          }
+          return arr;
+        });
+      } else {
+        onActionTracksChange?.(prev => prev.map(t => t.id === trackId ? { ...t, offset: newOffset } : t));
+      }
     } else {
-      setMusicTracks(prev => prev.map(t => t.id === trackId ? { ...t, offset: newOffset } : t));
+      if (rowShift !== 0) {
+        dragRef.current.lastY += rowShift * TRACK_H;
+        setMusicTracks(prev => {
+          const arr = [...prev];
+          const fromIdx = arr.findIndex(t => t.id === trackId);
+          if (fromIdx === -1) return arr.map(t => t.id === trackId ? { ...t, offset: newOffset } : t);
+          const toIdx = Math.max(0, Math.min(arr.length - 1, fromIdx + rowShift));
+          arr[fromIdx] = { ...arr[fromIdx], offset: newOffset };
+          if (fromIdx !== toIdx) {
+            const [item] = arr.splice(fromIdx, 1);
+            arr.splice(toIdx, 0, item);
+          }
+          return arr;
+        });
+      } else {
+        setMusicTracks(prev => prev.map(t => t.id === trackId ? { ...t, offset: newOffset } : t));
+      }
     }
   }, [onActionTracksChange]);
 

@@ -88,8 +88,13 @@ export default function HyMotionPage() {
   const [downloadFiles, setDownloadFiles] = useState([]);
   const [rewrittenPrompt, setRewrittenPrompt] = useState(null); // null = not yet rewritten
   const [isRewriting, setIsRewriting] = useState(false);
+  const [progress, setProgress] = useState(0);       // 0–100
+  const [progressStage, setProgressStage] = useState(''); // e.g. 'Submitting…'
+  const [retryCountdown, setRetryCountdown] = useState(null); // null or seconds remaining
   const iframeRef = useRef(null);
   const blobUrlRef = useRef(null);
+  const progressTimerRef = useRef(null);
+  const countdownTimerRef = useRef(null);
 
   useEffect(() => {
     if (!motionHtml || !iframeRef.current) return;
@@ -131,64 +136,183 @@ export default function HyMotionPage() {
     }
   }, [prompt]);
 
+  const startProgress = useCallback((fromPct) => {
+    clearInterval(progressTimerRef.current);
+    setProgress(fromPct);
+    progressTimerRef.current = setInterval(() => {
+      setProgress(prev => {
+        if (prev >= 92) { clearInterval(progressTimerRef.current); return prev; }
+        return prev + (92 - prev) * 0.018; // decelerates near 92%
+      });
+    }, 600);
+  }, []);
+
+  const finishProgress = useCallback((success) => {
+    clearInterval(progressTimerRef.current);
+    setProgress(success ? 100 : 0);
+  }, []);
+
+  const isSleepingError = (msg) =>
+    msg === 'space_sleeping' ||
+    (msg && (msg.includes('sleeping') || msg.includes('empty output')) && !msg.includes('quota') && !msg.includes('ZeroGPU'));
+
+  const startCountdown = useCallback((seconds) => new Promise((resolve) => {
+    setRetryCountdown(seconds);
+    let remaining = seconds;
+    countdownTimerRef.current = setInterval(() => {
+      remaining -= 1;
+      setRetryCountdown(remaining);
+      if (remaining <= 0) {
+        clearInterval(countdownTimerRef.current);
+        setRetryCountdown(null);
+        resolve();
+      }
+    }, 1000);
+  }), []);
+
+  const doGenerate = useCallback(async (textToUse, originalText) => {
+    setProgressStage('Submitting…');
+    setStatusMsg('Submitting to HY-Motion-1.0...');
+    startProgress(3);
+
+    const submitRes = await fetch(`${API_BASE}/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        original_text: originalText,
+        rewritten_text: textToUse,
+        seeds,
+        duration,
+        cfg_scale: cfg,
+      }),
+    });
+
+    if (!submitRes.ok) {
+      const err = await submitRes.json().catch(() => ({ error: submitRes.statusText }));
+      throw new Error(err.error || `Server error ${submitRes.status}`);
+    }
+
+    const { event_id, session_hash } = await submitRes.json();
+    if (!event_id) throw new Error('No event_id returned from server.');
+
+    setProgressStage('Generating…');
+    setStatusMsg('Generating motion... This may take 1–3 minutes.');
+    startProgress(18);
+
+    // Stream the SSE result — pass session_hash so Gradio can find the session
+    const resultUrl = session_hash
+      ? `${API_BASE}/result/${event_id}?session_hash=${session_hash}`
+      : `${API_BASE}/result/${event_id}`;
+    const resultRes = await fetch(resultUrl);
+    if (!resultRes.ok) throw new Error(`Result fetch failed (${resultRes.status})`);
+
+    const text = await resultRes.text();
+    console.log('[HyMotion] raw queue/data SSE:', text.slice(0, 4000));
+
+    let htmlContent = null;
+    let files = [];
+    let lastError = null;
+
+    // Parse queue/data SSE format: each line is `data: {"msg":"...","output":{...}}`
+    for (const line of text.split('\n')) {
+      if (!line.startsWith('data:')) continue;
+      const rawData = line.replace(/^data:\s*/, '').trim();
+      if (!rawData) continue;
+
+      let msg;
+      try { msg = JSON.parse(rawData); } catch { continue; }
+
+      // Queue position / progress events
+      if (msg.msg === 'estimation') {
+        const eta = msg.rank_eta ? Math.round(msg.rank_eta) : null;
+        if (eta) setStatusMsg(`In queue (position ${msg.rank ?? 0}, ~${eta}s wait)…`);
+        continue;
+      }
+      if (msg.msg === 'process_starts') continue;
+      if (msg.msg === 'close_stream') continue;
+      if (msg.msg === 'heartbeat') continue;
+
+      // Completion
+      if (msg.msg === 'process_completed') {
+        if (!msg.success) {
+          lastError = msg.output?.error || 'Generation failed';
+          continue;
+        }
+        const resultData = msg.output?.data;
+        if (Array.isArray(resultData)) {
+          htmlContent = resultData[0] || null;
+          const rawFiles = resultData[1];
+          files = rawFiles ? (Array.isArray(rawFiles) ? rawFiles : [rawFiles]) : [];
+        }
+        break;
+      }
+
+      // Fallback: generic error field
+      if (msg.error) { lastError = String(msg.error); }
+    }
+
+    if (!htmlContent && !files.length) {
+      const err = lastError || 'space_sleeping';
+      // ZeroGPU quota exhausted
+      if (err.includes('ZeroGPU') || err.includes('quota')) {
+        throw new Error('ZeroGPU daily quota exhausted. Please use a different HF token or wait for quota reset.');
+      }
+      throw new Error(err === 'space_sleeping' ? 'space_sleeping' : err);
+    }
+
+    return { htmlContent, files };
+  }, [seeds, duration, cfg, startProgress]);
+
   const handleGenerate = useCallback(async () => {
     if (!prompt.trim()) { setStatus('error'); setStatusMsg('Please enter a motion description.'); return; }
 
     setStatus('loading');
     setMotionHtml(null);
     setDownloadFiles([]);
-    setStatusMsg('Submitting to HY-Motion-1.0...');
+    setProgress(0);
+    setRetryCountdown(null);
 
     const textToUse = rewrittenPrompt?.trim() || prompt.trim();
+    const originalText = prompt.trim();
+    const MAX_RETRIES = 3;
+    const RETRY_DELAY = 35;
 
-    try {
-      const submitRes = await fetch(`${API_BASE}/generate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          original_text: prompt.trim(),
-          rewritten_text: textToUse,
-          seeds,
-          duration,
-          cfg_scale: cfg,
-        }),
-      });
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const { htmlContent, files } = await doGenerate(textToUse, originalText);
 
-      if (!submitRes.ok) {
-        const err = await submitRes.json().catch(() => ({ error: submitRes.statusText }));
-        throw new Error(err.error || `Server error ${submitRes.status}`);
+        console.log('[HyMotion] raw files from API:', JSON.stringify(files));
+        setProgressStage('Done');
+        finishProgress(true);
+        setMotionHtml(htmlContent || '');
+        setDownloadFiles(Array.isArray(files) ? files : (files ? [files] : []));
+        setStatus('success');
+        setStatusMsg('Motion generated successfully!');
+        return;
+      } catch (err) {
+        console.error(`HyMotion attempt ${attempt + 1} error:`, err);
+        const sleeping = err.message === 'space_sleeping' || isSleepingError(err.message);
+
+        if (sleeping && attempt < MAX_RETRIES) {
+          clearInterval(progressTimerRef.current);
+          setProgress(0);
+          setProgressStage('Waking up Space…');
+          setStatusMsg(`HY-Motion Space is sleeping. Auto-retrying (${attempt + 1}/${MAX_RETRIES})…`);
+          await startCountdown(RETRY_DELAY);
+          continue;
+        }
+
+        finishProgress(false);
+        setProgressStage('');
+        setRetryCountdown(null);
+        setStatus('error');
+        setStatusMsg(sleeping
+          ? 'Space did not wake up after retries. Please visit the HY-Motion Space to wake it manually, then try again.'
+          : `Error: ${err.message}`);
+        return;
       }
-
-      const { event_id } = await submitRes.json();
-      if (!event_id) throw new Error('No event_id returned from server.');
-
-      setStatusMsg('Generating motion... This may take 1–3 minutes.');
-
-      const resultRes = await fetch(`${API_BASE}/result/${event_id}`);
-      if (!resultRes.ok) throw new Error(`Result fetch failed (${resultRes.status})`);
-
-      const text = await resultRes.text();
-      const dataLines = text.split('\n').filter(l => l.startsWith('data:'));
-      if (!dataLines.length) throw new Error('No data received from generation.');
-
-      const parsed = JSON.parse(dataLines[dataLines.length - 1].replace(/^data:\s*/, ''));
-      if (parsed?.error) throw new Error(parsed.error);
-
-      const htmlContent = Array.isArray(parsed) ? parsed[0] : null;
-      const files = Array.isArray(parsed) && parsed[1] ? parsed[1] : [];
-      console.log('[HyMotion] raw files from API:', JSON.stringify(files));
-      if (!htmlContent && !files.length) throw new Error('Generation returned empty output.');
-
-      setMotionHtml(htmlContent || '');
-      setDownloadFiles(Array.isArray(files) ? files : (files ? [files] : []));
-      setStatus('success');
-      setStatusMsg('Motion generated successfully!');
-    } catch (err) {
-      console.error('HyMotion generation error:', err);
-      setStatus('error');
-      setStatusMsg(`Error: ${err.message}`);
     }
-  }, [prompt, duration, seeds, cfg]);
+  }, [prompt, rewrittenPrompt, doGenerate, finishProgress, startCountdown]);
 
   return (
     <div className="flex h-full overflow-hidden bg-gray-950">
@@ -294,10 +418,34 @@ export default function HyMotionPage() {
           <div className={`text-xs px-3 py-2 rounded-lg border ${
             status === 'success' ? 'bg-emerald-900/30 border-emerald-700/40 text-emerald-400' :
             status === 'error'   ? 'bg-red-900/30 border-red-700/40 text-red-400' :
-            status === 'loading' ? 'bg-yellow-900/20 border-yellow-700/30 text-yellow-400 animate-pulse' :
+            status === 'loading' ? 'bg-gray-900/60 border-purple-800/40 text-gray-400' :
             'bg-gray-800/40 border-gray-700/40 text-gray-500'
           }`}>
-            {statusMsg}
+            {status === 'loading' ? (
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-purple-300 font-medium">{progressStage}</span>
+                  {retryCountdown !== null
+                    ? <span className="text-yellow-400 tabular-nums font-medium">{retryCountdown}s</span>
+                    : <span className="text-gray-500 tabular-nums">{Math.round(progress)}%</span>
+                  }
+                </div>
+                {retryCountdown !== null ? (
+                  <div className="w-full bg-gray-800 rounded-full h-1 overflow-hidden">
+                    <div className="h-full rounded-full bg-yellow-500 transition-all duration-1000 ease-linear"
+                      style={{ width: `${(retryCountdown / 35) * 100}%` }} />
+                  </div>
+                ) : (
+                  <div className="w-full bg-gray-800 rounded-full h-1 overflow-hidden">
+                    <div
+                      className="h-full rounded-full bg-gradient-to-r from-purple-600 to-violet-400 transition-all duration-700 ease-out"
+                      style={{ width: `${progress}%` }}
+                    />
+                  </div>
+                )}
+                <p className="text-gray-600 mt-1.5 text-[10px] truncate">{statusMsg}</p>
+              </div>
+            ) : statusMsg}
           </div>
 
           {/* Example prompts */}
@@ -339,10 +487,35 @@ export default function HyMotionPage() {
           )}
           {status === 'loading' && !motionHtml && (
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-              <div className="text-center">
-                <div className="w-12 h-12 border-2 border-purple-500 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-                <p className="text-sm text-gray-400">Generating motion...</p>
-                <p className="text-xs text-gray-600 mt-1">This may take 1–3 minutes</p>
+              <div className="w-80 text-center">
+                {/* Spinner */}
+                <div className="w-12 h-12 border-2 border-purple-500 border-t-transparent rounded-full animate-spin mx-auto mb-6" />
+
+                {/* Stage label */}
+                <p className="text-sm font-medium text-purple-300 mb-1">{progressStage}</p>
+                {retryCountdown !== null ? (
+                  <p className="text-xs text-yellow-400 mb-4">Retrying in {retryCountdown}s…</p>
+                ) : (
+                  <p className="text-xs text-gray-500 mb-4">This may take 1–3 minutes</p>
+                )}
+
+                {/* Progress bar */}
+                {retryCountdown !== null ? (
+                  <div className="w-full bg-gray-800 rounded-full h-1.5 overflow-hidden">
+                    <div className="h-full rounded-full bg-yellow-500 transition-all duration-1000 ease-linear"
+                      style={{ width: `${(retryCountdown / 35) * 100}%` }} />
+                  </div>
+                ) : (
+                  <div className="w-full bg-gray-800 rounded-full h-1.5 overflow-hidden">
+                    <div
+                      className="h-full rounded-full bg-gradient-to-r from-purple-600 to-violet-400 transition-all duration-700 ease-out"
+                      style={{ width: `${progress}%` }}
+                    />
+                  </div>
+                )}
+                <p className="text-[10px] text-gray-600 mt-2 tabular-nums">
+                  {retryCountdown !== null ? `Auto-retry in ${retryCountdown}s` : `${Math.round(progress)}%`}
+                </p>
               </div>
             </div>
           )}

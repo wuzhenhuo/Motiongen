@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { usePipelineTask } from '../hooks/usePipelineTask.js';
 import { getDownloadUrl } from '../utils/api.js';
 
@@ -73,6 +73,45 @@ function PreviewBtn({ url, label, onPreview }) {
   );
 }
 
+// ── Tab: 拆分 (segment_model) ─────────────────────────────────
+
+function SegmentTab({ taskId, onPreview }) {
+  const { status, progress, result, error, run, reset } = usePipelineTask();
+  const isRunning = ['queued', 'running'].includes(status);
+  const isDone = status === 'success';
+
+  useEffect(() => {
+    if (isDone && result?.model_url) onPreview({ url: getDownloadUrl(result.model_url), label: '拆分预览' });
+  }, [isDone, result?.model_url]);
+
+  return (
+    <div className="space-y-3">
+      <p className="text-xs text-gray-400 leading-relaxed">
+        将模型自动拆分为多个独立部件，适用于复杂模型的分段编辑与导出。
+      </p>
+      <div className="flex items-center gap-3 flex-wrap">
+        {!isDone && (
+          <RunBtn
+            onClick={() => run('segment_model', taskId)}
+            disabled={isRunning}
+            label={isRunning ? '拆分中...' : '开始拆分'}
+          />
+        )}
+        {status !== 'idle' && <ResetBtn onClick={reset} />}
+      </div>
+      {isRunning && <MiniProgress progress={progress} status={status} />}
+      {isDone && result && (
+        <div className="flex items-center gap-3 flex-wrap">
+          <span className="text-xs text-emerald-400 font-medium">✓ 拆分完成</span>
+          {result.model_url && <PreviewBtn url={result.model_url} label="拆分预览" onPreview={onPreview} />}
+          {result.model_url && <DownloadBtn url={result.model_url} label="下载拆分模型" />}
+        </div>
+      )}
+      {error && <p className="text-xs text-red-400">{error}</p>}
+    </div>
+  );
+}
+
 // ── Tab: 重拓扑 (convert_model — export clean topology) ───────
 
 function RetopoTab({ taskId, onPreview }) {
@@ -81,6 +120,10 @@ function RetopoTab({ taskId, onPreview }) {
   const [quad, setQuad] = useState(true);
   const isRunning = ['queued', 'running'].includes(status);
   const isDone = status === 'success';
+
+  useEffect(() => {
+    if (isDone && result?.model_url) onPreview({ url: getDownloadUrl(result.model_url), label: `重拓扑 ${format.toUpperCase()}` });
+  }, [isDone, result?.model_url]);
 
   return (
     <div className="space-y-3">
@@ -146,6 +189,10 @@ function TextureTab({ taskId, onPreview }) {
   const isRunning = ['queued', 'running'].includes(status);
   const isDone = status === 'success';
 
+  useEffect(() => {
+    if (isDone && result?.model_url) onPreview({ url: getDownloadUrl(result.model_url), label: 'HD纹理' });
+  }, [isDone, result?.model_url]);
+
   return (
     <div className="space-y-3">
       <p className="text-xs text-gray-400 leading-relaxed">
@@ -196,6 +243,14 @@ function AnimateTab({ taskId, onPreview }) {
   const rigRunning = ['queued', 'running'].includes(rigHook.status);
   const rigDone = rigHook.status === 'success';
   const retargetRunning = ['queued', 'running'].includes(retargetHook.status);
+  const retargetDone = retargetHook.status === 'success';
+
+  // Auto-preview animated model when retarget completes
+  useEffect(() => {
+    if (retargetDone && retargetHook.result?.model_url) {
+      onPreview({ url: getDownloadUrl(retargetHook.result.model_url), label: '动画预览' });
+    }
+  }, [retargetDone, retargetHook.result?.model_url]);
 
   return (
     <div className="flex gap-6 flex-wrap">
@@ -289,23 +344,30 @@ function AnimateTab({ taskId, onPreview }) {
 // ── Main Panel ────────────────────────────────────────────────
 
 const TABS = [
-  { id: 'retopo',  label: '格式导出' },
+  { id: 'segment', label: '拆分' },
+  { id: 'retopo',  label: '重拓扑' },
   { id: 'texture', label: '纹理生成' },
   { id: 'animate', label: '动画绑定' },
 ];
 
 export default function PostProcessPanel({ taskId, onPreview }) {
-  const [activeTab, setActiveTab] = useState('retopo');
+  const [activeTab, setActiveTab] = useState('segment');
+  const hasModel = Boolean(taskId);
 
   return (
-    <div className="flex-shrink-0 border-t border-gray-800 bg-gray-900/80 backdrop-blur">
+    <div className="flex flex-col h-full bg-gray-900/30">
+      {/* Section header */}
+      <div className="flex-shrink-0 px-4 py-2.5 border-b border-gray-800/60">
+        <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">后处理</p>
+      </div>
+
       {/* Tab bar */}
-      <div className="flex border-b border-gray-800/60">
+      <div className="flex-shrink-0 flex border-b border-gray-800/60">
         {TABS.map(tab => (
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
-            className={`flex-1 py-2.5 text-xs font-medium transition-colors ${
+            className={`flex-1 py-2 text-[11px] font-medium transition-colors ${
               activeTab === tab.id
                 ? 'text-indigo-400 border-b-2 border-indigo-500 bg-indigo-500/5'
                 : 'text-gray-500 hover:text-gray-300'
@@ -317,10 +379,28 @@ export default function PostProcessPanel({ taskId, onPreview }) {
       </div>
 
       {/* Tab content */}
-      <div className="p-4 min-h-[130px] max-h-[210px] overflow-y-auto">
-        {activeTab === 'retopo'  && <RetopoTab  taskId={taskId} onPreview={onPreview} />}
-        {activeTab === 'texture' && <TextureTab  taskId={taskId} onPreview={onPreview} />}
-        {activeTab === 'animate' && <AnimateTab  taskId={taskId} onPreview={onPreview} />}
+      <div className="flex-1 overflow-y-auto p-4">
+        {!hasModel ? (
+          <div className="flex flex-col items-center justify-center h-full gap-3 py-8">
+            <div className="w-10 h-10 rounded-xl bg-gray-800/60 border border-gray-700/40 flex items-center justify-center">
+              <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+                  d="M21 7.5l-9-5.25L3 7.5m18 0l-9 5.25m9-5.25v9l-9 5.25M3 7.5l9 5.25M3 7.5v9l9 5.25m0-9v9" />
+              </svg>
+            </div>
+            <p className="text-xs text-gray-600 text-center leading-relaxed">
+              先在上方生成 3D 模型，<br />生成完成后可使用<br />
+              <span className="text-gray-500">拆分 · 重拓扑 · 纹理 · 动画</span>
+            </p>
+          </div>
+        ) : (
+          <>
+            {activeTab === 'segment' && <SegmentTab taskId={taskId} onPreview={onPreview} />}
+            {activeTab === 'retopo'  && <RetopoTab  taskId={taskId} onPreview={onPreview} />}
+            {activeTab === 'texture' && <TextureTab  taskId={taskId} onPreview={onPreview} />}
+            {activeTab === 'animate' && <AnimateTab  taskId={taskId} onPreview={onPreview} />}
+          </>
+        )}
       </div>
     </div>
   );

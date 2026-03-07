@@ -190,29 +190,65 @@ export default function App() {
       {/* ── Body ───────────────────────────────────────── */}
       <div className={`flex flex-1 overflow-hidden ${page === 'motion' ? 'hidden' : ''}`}>
 
-        {/* ── Sidebar — only on generate page ──────────── */}
-        {page === 'generate' && (
-          <aside className="w-72 flex-shrink-0 border-r border-gray-800 bg-gray-900/50 flex flex-col overflow-hidden">
-            <div className="flex-1 overflow-y-auto p-4 space-y-4">
-              <PromptInput onGenerate={generate} disabled={isGenerating} />
+        {/* ── Sidebar ───────────────────────────────────── */}
+        <aside className="w-72 flex-shrink-0 border-r border-gray-800 bg-gray-900/50 flex flex-col overflow-hidden">
+          {page === 'generate' ? (
+            <>
+              {/* ── Generation controls ── */}
+              <div className="flex-shrink-0 p-4 space-y-3 border-b border-gray-800 overflow-y-auto max-h-[55vh]">
+                <PromptInput onGenerate={generate} disabled={isGenerating} />
 
-              {status !== 'idle' && (
-                <div className="bg-gray-800/50 rounded-xl p-3 space-y-2">
-                  <ProgressBar status={status} progress={progress} error={error} />
-                  {status === 'failed' && (
-                    <button
-                      onClick={handleReset}
-                      className="w-full py-1.5 text-xs bg-gray-700 hover:bg-gray-600 rounded-lg text-gray-300 transition"
-                    >
-                      重试
+                {status !== 'idle' && (
+                  <div className="bg-gray-800/50 rounded-xl p-3 space-y-2">
+                    <ProgressBar status={status} progress={progress} error={error} />
+                    {status === 'failed' && (
+                      <button onClick={handleReset}
+                        className="w-full py-1.5 text-xs bg-gray-700 hover:bg-gray-600 rounded-lg text-gray-300 transition">
+                        重试
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {/* Download + new after success */}
+                {status === 'success' && result && (
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    <span className="w-full text-xs text-emerald-400 font-medium">✓ 模型生成成功</span>
+                    {result.model_url && (
+                      <a href={getDownloadUrl(result.model_url)} download
+                        className="flex-1 text-center px-2 py-1.5 text-xs bg-indigo-600 hover:bg-indigo-500 rounded-lg text-white font-medium transition">
+                        下载 GLB
+                      </a>
+                    )}
+                    {result.pbr_model_url && (
+                      <a href={getDownloadUrl(result.pbr_model_url)} download
+                        className="flex-1 text-center px-2 py-1.5 text-xs bg-emerald-700 hover:bg-emerald-600 rounded-lg text-white font-medium transition">
+                        下载 PBR
+                      </a>
+                    )}
+                    <button onClick={() => { handleSave(); handleReset(); }}
+                      className="px-3 py-1.5 text-xs bg-gray-700 hover:bg-gray-600 rounded-lg text-gray-300 transition">
+                      新建
                     </button>
-                  )}
-                </div>
-              )}
-            </div>
+                  </div>
+                )}
+              </div>
 
-          </aside>
-        )}
+              {/* ── Pipeline tabs — always visible ── */}
+              <div className="flex-1 overflow-hidden flex flex-col min-h-0">
+                <PostProcessPanel
+                  taskId={result?.task_id ?? null}
+                  onPreview={setPipelinePreview}
+                />
+              </div>
+            </>
+          ) : (
+            /* ── Animate page sidebar placeholder ── */
+            <div className="flex-1 flex items-center justify-center p-4">
+              <p className="text-xs text-gray-600 text-center">在下方时间线上传动作文件</p>
+            </div>
+          )}
+        </aside>
 
         {/* ── Main Area ────────────────────────────────── */}
         <main className="flex-1 flex flex-col overflow-hidden">
@@ -224,55 +260,12 @@ export default function App() {
               modelUrl={activeViewerUrl}
               label={activeViewerLabel}
               fileType={activeViewerFileType}
+              page={page}
               onActionPlayStart={() => musicTimelineRef.current?.startPlay()}
               onActionStop={() => musicTimelineRef.current?.stopPlay()}
             />
             {!activeViewerUrl && <EmptyState page={page} />}
           </div>
-
-          {/* ── Generate page bottom panels ── */}
-          {page === 'generate' && (
-            <>
-              {/* Action bar after successful generation */}
-              {status === 'success' && result && (
-                <div className="flex-shrink-0 flex items-center gap-3 px-5 py-2.5 border-t border-gray-800 bg-gray-900/80 backdrop-blur">
-                  <span className="text-xs text-emerald-400 font-medium flex-1">✓ 模型生成成功</span>
-                  {result.model_url && (
-                    <a
-                      href={getDownloadUrl(result.model_url)}
-                      download
-                      className="px-3 py-1.5 text-xs bg-indigo-600 hover:bg-indigo-500 rounded-lg text-white font-medium transition"
-                    >
-                      下载 GLB
-                    </a>
-                  )}
-                  {result.pbr_model_url && (
-                    <a
-                      href={getDownloadUrl(result.pbr_model_url)}
-                      download
-                      className="px-3 py-1.5 text-xs bg-emerald-700 hover:bg-emerald-600 rounded-lg text-white font-medium transition"
-                    >
-                      下载 PBR
-                    </a>
-                  )}
-                  <button
-                    onClick={() => { handleSave(); handleReset(); }}
-                    className="px-3 py-1.5 text-xs bg-gray-700 hover:bg-gray-600 rounded-lg text-gray-300 transition"
-                  >
-                    新建
-                  </button>
-                </div>
-              )}
-
-              {/* Pipeline panel */}
-              {status === 'success' && result?.task_id && (
-                <PostProcessPanel
-                  taskId={result.task_id}
-                  onPreview={setPipelinePreview}
-                />
-              )}
-            </>
-          )}
 
           {/* ── Animate page bottom panel ── */}
           {page === 'animate' && (

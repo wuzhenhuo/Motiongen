@@ -161,7 +161,7 @@ router.post('/pipeline', async (req, res) => {
   try {
     const { type, original_model_task_id, ...options } = req.body;
 
-    const VALID_TYPES = ['texture_model', 'convert_model', 'animate_rig', 'animate_retarget'];
+    const VALID_TYPES = ['texture_model', 'convert_model', 'animate_rig', 'animate_retarget', 'segment_model', 'refine_model'];
     if (!type || !VALID_TYPES.includes(type)) {
       return res.status(400).json({ error: `type must be one of: ${VALID_TYPES.join(', ')}` });
     }

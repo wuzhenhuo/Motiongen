@@ -8,18 +8,23 @@
 
 import { Router } from 'express';
 import fetch from 'node-fetch';
+import { randomBytes } from 'crypto';
 
 const router = Router();
 
 const HF_SPACE = 'https://tencent-hy-motion-1-0.hf.space';
-const FN_NAME = 'generate_motion_func';
+const FN_INDEX = 8; // generate_motion_func fn_index from /config
+
+function makeSessionHash() {
+  return randomBytes(8).toString('hex');
+}
 
 /** Resolve HF token: prefer env var, fall back to header from client */
 function resolveToken(req) {
   return process.env.HF_TOKEN?.trim() || req.headers['x-hf-token'] || '';
 }
 
-/** POST /api/hymotion/generate */
+/** POST /api/hymotion/generate — submits to HF /queue/join */
 router.post('/generate', async (req, res) => {
   const { original_text, rewritten_text, seeds, duration, cfg_scale } = req.body;
   const token = resolveToken(req);
@@ -27,11 +32,14 @@ router.post('/generate', async (req, res) => {
   const headers = { 'Content-Type': 'application/json' };
   if (token) headers['Authorization'] = `Bearer ${token}`;
 
+  const session_hash = makeSessionHash();
+
   try {
-    const hfRes = await fetch(`${HF_SPACE}/call/${FN_NAME}`, {
+    const hfRes = await fetch(`${HF_SPACE}/queue/join`, {
       method: 'POST',
       headers,
       body: JSON.stringify({
+        fn_index: FN_INDEX,
         data: [
           String(original_text ?? ''),
           String(rewritten_text ?? original_text ?? ''),
@@ -39,6 +47,8 @@ router.post('/generate', async (req, res) => {
           Number(duration ?? 5.0),
           Number(cfg_scale ?? 5.0),
         ],
+        session_hash,
+        event_data: null,
       }),
     });
 
@@ -48,56 +58,60 @@ router.post('/generate', async (req, res) => {
     }
 
     const data = await hfRes.json();
-    res.json({ event_id: data.event_id });
+    console.log('[hymotion] queue/join response:', JSON.stringify(data));
+    res.json({ event_id: data.event_id, session_hash });
   } catch (err) {
     console.error('[hymotion] generate error:', err);
     res.status(500).json({ error: err.message });
   }
 });
 
-/** GET /api/hymotion/result/:eventId — SSE proxy */
+/** GET /api/hymotion/result/:eventId — SSE proxy from HF /queue/data */
 router.get('/result/:eventId', async (req, res) => {
-  const { eventId } = req.params;
+  const { session_hash } = req.query;
   const token = resolveToken(req);
 
   const headers = {};
   if (token) headers['Authorization'] = `Bearer ${token}`;
 
-  // Set SSE headers so the client can consume them the same way
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders();
 
+  const queueUrl = `${HF_SPACE}/queue/data?session_hash=${session_hash}`;
+  console.log('[hymotion] connecting to queue/data:', queueUrl);
+
   try {
-    const hfRes = await fetch(`${HF_SPACE}/call/${FN_NAME}/${eventId}`, { headers });
+    const hfRes = await fetch(queueUrl, { headers });
 
     if (!hfRes.ok) {
-      res.write(`event: error\ndata: {"error": "HF Space returned ${hfRes.status}"}\n\n`);
+      const errText = await hfRes.text().catch(() => '');
+      console.error(`[hymotion] queue/data HTTP ${hfRes.status}:`, errText.slice(0, 300));
+      res.write(`data: ${JSON.stringify({ error: `HF Space returned ${hfRes.status}` })}\n\n`);
       return res.end();
     }
 
+    let rawBuf = '';
     hfRes.body.on('data', (chunk) => {
+      rawBuf += chunk.toString();
       res.write(chunk);
     });
 
     hfRes.body.on('end', () => {
+      console.log('[hymotion] queue/data complete, raw (first 2000 chars):\n', rawBuf.slice(0, 2000));
       res.end();
     });
 
     hfRes.body.on('error', (err) => {
       console.error('[hymotion] stream error:', err);
-      res.write(`event: error\ndata: {"error": "${err.message}"}\n\n`);
       res.end();
     });
 
-    // If client disconnects, destroy the upstream connection
-    req.on('close', () => {
-      hfRes.body.destroy();
-    });
+    req.on('close', () => { hfRes.body.destroy(); });
   } catch (err) {
     console.error('[hymotion] result error:', err);
-    res.write(`event: error\ndata: {"error": "${err.message}"}\n\n`);
+    res.write(`data: ${JSON.stringify({ error: err.message })}\n\n`);
     res.end();
   }
 });
@@ -120,28 +134,31 @@ router.post('/rewrite', async (req, res) => {
         'Authorization': `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: 'glm-4-5',
+        model: 'glm-4-flash',
         max_tokens: 300,
-        messages: [{
-          role: 'user',
-          content: `You are a motion description optimizer for HY-Motion-1.0, a text-to-3D-motion AI model.
+        messages: [
+          {
+            role: 'system',
+            content: `You are a motion description optimizer for HY-Motion-1.0, a text-to-3D-motion AI model. Rewrite user motion descriptions to be clearer and more precise, and predict an appropriate duration.
 
-Rewrite the following motion description to be clearer and more precise for motion generation. Also predict an appropriate duration.
-
-Rules:
+Rewriting rules:
 - Start with "A person" or "The person"
 - Be specific about body parts (arms, legs, torso, head, hips, etc.)
-- Describe the movement sequence clearly with temporal connectors (then, while, simultaneously)
+- Use temporal connectors (then, while, simultaneously)
 - Use precise action verbs
 - Keep under 60 words
 - English only
 
-Predict duration in seconds (0.5–12) based on motion complexity and natural timing.
+Duration: predict seconds (0.5–12) based on motion complexity and natural timing.
 
-Input: "${text.trim()}"
-
-Return ONLY valid JSON with no extra text: {"rewritten": "...", "duration": 5.0}`,
-        }],
+IMPORTANT: Return ONLY a raw JSON object with no markdown, no code fences, no extra text.
+Format: {"rewritten": "...", "duration": 5.0}`,
+          },
+          {
+            role: 'user',
+            content: `Rewrite this motion description and predict duration:\n"${text.trim()}"`,
+          },
+        ],
       }),
     });
 
@@ -152,7 +169,9 @@ Return ONLY valid JSON with no extra text: {"rewritten": "...", "duration": 5.0}
 
     const data = await zhipuRes.json();
     const raw = data.choices?.[0]?.message?.content?.trim() || '';
-    const parsed = JSON.parse(raw);
+    // Strip markdown code fences if present (```json ... ``` or ``` ... ```)
+    const jsonStr = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+    const parsed = JSON.parse(jsonStr);
     res.json({ rewritten: parsed.rewritten || text.trim(), duration: parsed.duration || null });
   } catch (err) {
     console.error('[hymotion] rewrite error:', err);
