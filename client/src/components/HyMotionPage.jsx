@@ -1,5 +1,43 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 
+function useResizable(defaultWidth = 384, min = 240, max = 640) {
+  const [width, setWidth] = useState(defaultWidth);
+  const dragging = useRef(false);
+  const startX = useRef(0);
+  const startW = useRef(0);
+
+  const onMouseDown = useCallback((e) => {
+    dragging.current = true;
+    startX.current = e.clientX;
+    startW.current = width;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  }, [width]);
+
+  useEffect(() => {
+    const onMouseMove = (e) => {
+      if (!dragging.current) return;
+      const delta = e.clientX - startX.current;
+      setWidth(Math.min(max, Math.max(min, startW.current + delta)));
+    };
+    const onMouseUp = () => {
+      if (!dragging.current) return;
+      dragging.current = false;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
+  }, [min, max]);
+
+  return { width, onMouseDown };
+}
+
+
 const EXAMPLE_PROMPTS = [
   { text: 'A person jumps upward with both legs twice.', duration: 4.5 },
   { text: 'A person jumps on their right leg.', duration: 4.5 },
@@ -16,13 +54,30 @@ const EXAMPLE_PROMPTS = [
 ];
 
 const API_BASE = '/api/hymotion';
+const HF_SPACE = 'https://tencent-hy-motion-1-0.hf.space';
+
+function resolveFileUrl(file) {
+  let url = null;
+  if (typeof file === 'string') {
+    url = file;
+  } else if (file?.url) {
+    url = file.url;
+  } else if (file?.path) {
+    // Gradio path like /tmp/gradio/xxx/file.fbx → full URL
+    url = `${HF_SPACE}/file=${file.path}`;
+  }
+  if (!url) return null;
+  // Make relative URLs absolute
+  if (url.startsWith('/')) url = `${HF_SPACE}${url}`;
+  return url;
+}
 
 function randomSeeds() {
   return Array.from({ length: 4 }, () => Math.floor(Math.random() * 1000)).join(',');
 }
 
 export default function HyMotionPage() {
-  const [apiKey, setApiKey] = useState('');
+  const { width: sidebarWidth, onMouseDown: onDividerMouseDown } = useResizable(384, 240, 640);
   const [prompt, setPrompt] = useState('');
   const [duration, setDuration] = useState(5.0);
   const [seeds, setSeeds] = useState('0,1,2,3');
@@ -31,6 +86,8 @@ export default function HyMotionPage() {
   const [statusMsg, setStatusMsg] = useState('Ready. Enter a motion description and click Generate.');
   const [motionHtml, setMotionHtml] = useState(null);
   const [downloadFiles, setDownloadFiles] = useState([]);
+  const [rewrittenPrompt, setRewrittenPrompt] = useState(null); // null = not yet rewritten
+  const [isRewriting, setIsRewriting] = useState(false);
   const iframeRef = useRef(null);
   const blobUrlRef = useRef(null);
 
@@ -52,6 +109,28 @@ export default function HyMotionPage() {
     setStatusMsg('Example loaded. Click Generate to create motion.');
   }, []);
 
+  const handleRewrite = useCallback(async () => {
+    if (!prompt.trim()) return;
+    setIsRewriting(true);
+    setStatusMsg('Rewriting prompt...');
+    try {
+      const res = await fetch(`${API_BASE}/rewrite`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: prompt.trim() }),
+      });
+      const data = await res.json();
+      setRewrittenPrompt(data.rewritten || prompt.trim());
+      if (data.duration) setDuration(parseFloat(data.duration.toFixed(1)));
+      setStatusMsg('Rewrite complete. Review and click Generate.');
+    } catch {
+      setRewrittenPrompt(prompt.trim());
+      setStatusMsg('Rewrite failed, showing original text.');
+    } finally {
+      setIsRewriting(false);
+    }
+  }, [prompt]);
+
   const handleGenerate = useCallback(async () => {
     if (!prompt.trim()) { setStatus('error'); setStatusMsg('Please enter a motion description.'); return; }
 
@@ -60,16 +139,15 @@ export default function HyMotionPage() {
     setDownloadFiles([]);
     setStatusMsg('Submitting to HY-Motion-1.0...');
 
+    const textToUse = rewrittenPrompt?.trim() || prompt.trim();
+
     try {
       const submitRes = await fetch(`${API_BASE}/generate`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(apiKey.trim() ? { 'x-hf-token': apiKey.trim() } : {}),
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           original_text: prompt.trim(),
-          rewritten_text: prompt.trim(),
+          rewritten_text: textToUse,
           seeds,
           duration,
           cfg_scale: cfg,
@@ -86,9 +164,7 @@ export default function HyMotionPage() {
 
       setStatusMsg('Generating motion... This may take 1–3 minutes.');
 
-      const resultRes = await fetch(`${API_BASE}/result/${event_id}`, {
-        headers: apiKey.trim() ? { 'x-hf-token': apiKey.trim() } : {},
-      });
+      const resultRes = await fetch(`${API_BASE}/result/${event_id}`);
       if (!resultRes.ok) throw new Error(`Result fetch failed (${resultRes.status})`);
 
       const text = await resultRes.text();
@@ -100,10 +176,11 @@ export default function HyMotionPage() {
 
       const htmlContent = Array.isArray(parsed) ? parsed[0] : null;
       const files = Array.isArray(parsed) && parsed[1] ? parsed[1] : [];
+      console.log('[HyMotion] raw files from API:', JSON.stringify(files));
       if (!htmlContent && !files.length) throw new Error('Generation returned empty output.');
 
       setMotionHtml(htmlContent || '');
-      setDownloadFiles(files);
+      setDownloadFiles(Array.isArray(files) ? files : (files ? [files] : []));
       setStatus('success');
       setStatusMsg('Motion generated successfully!');
     } catch (err) {
@@ -111,38 +188,55 @@ export default function HyMotionPage() {
       setStatus('error');
       setStatusMsg(`Error: ${err.message}`);
     }
-  }, [apiKey, prompt, duration, seeds, cfg]);
+  }, [prompt, duration, seeds, cfg]);
 
   return (
     <div className="flex h-full overflow-hidden bg-gray-950">
 
       {/* ── Left panel: controls ── */}
-      <aside className="w-72 flex-shrink-0 border-r border-gray-800 bg-gray-900/50 flex flex-col overflow-y-auto">
+      <aside style={{ width: sidebarWidth }} className="flex-shrink-0 bg-gray-900/50 flex flex-col overflow-y-auto">
         <div className="p-4 space-y-3">
 
-          {/* API Key */}
+          {/* Input Text */}
           <div>
-            <label className="block text-xs font-medium text-gray-300 mb-1.5">🔑 Hugging Face API Key</label>
-            <input
-              type="password"
-              value={apiKey}
-              onChange={e => setApiKey(e.target.value)}
-              placeholder="hf_xxxx  (or set HF_TOKEN in server/.env)"
-              className="w-full px-3 py-2 bg-gray-900 border border-gray-700 text-gray-200 text-xs rounded-lg focus:outline-none focus:border-purple-500 placeholder-gray-600"
-            />
-          </div>
-
-          {/* Prompt */}
-          <div>
-            <label className="block text-xs font-medium text-gray-300 mb-1.5">📝 Motion Description</label>
+            <label className="block text-xs font-medium text-gray-300 mb-1.5">📝 Input Text</label>
             <textarea
               value={prompt}
-              onChange={e => setPrompt(e.target.value)}
-              rows={5}
-              placeholder={'Describe the motion you want to generate.\n\nTips:\n• Start with "A person..."\n• Focus on body movements\n• Keep under 60 words\n• English only'}
+              onChange={e => { setPrompt(e.target.value); setRewrittenPrompt(null); }}
+              rows={4}
+              placeholder={'Describe the motion, e.g.:\n"A person jumps up with both arms raised."'}
               className="w-full px-3 py-2 bg-gray-900 border border-gray-700 text-gray-200 text-sm rounded-lg focus:outline-none focus:border-purple-500 placeholder-gray-600 resize-none"
             />
           </div>
+
+          {/* Rewrite button */}
+          <button
+            onClick={handleRewrite}
+            disabled={isRewriting || !prompt.trim()}
+            className={`w-full py-2 rounded-xl text-sm font-semibold transition ${
+              isRewriting
+                ? 'bg-gray-700/60 cursor-not-allowed text-gray-500'
+                : 'bg-gray-800 hover:bg-gray-700 border border-gray-600/50 hover:border-purple-600/50 text-gray-300 hover:text-white'
+            }`}
+          >
+            {isRewriting ? '🔄 Rewriting...' : '🔄 Rewrite Text'}
+          </button>
+
+          {/* Rewritten Prompt — shown after rewrite */}
+          {rewrittenPrompt !== null && (
+            <div>
+              <div className="flex items-center gap-2 mb-1.5">
+                <label className="text-xs font-medium text-gray-300">✏️ Rewritten Prompt</label>
+                <span className="text-[10px] text-gray-500 italic">auto-filled after rewrite, you can further edit</span>
+              </div>
+              <textarea
+                value={rewrittenPrompt}
+                onChange={e => setRewrittenPrompt(e.target.value)}
+                rows={4}
+                className="w-full px-3 py-2 bg-gray-900/80 border border-purple-700/40 text-purple-100 text-sm rounded-lg focus:outline-none focus:border-purple-500 resize-none"
+              />
+            </div>
+          )}
 
           {/* Duration */}
           <div>
@@ -223,6 +317,12 @@ export default function HyMotionPage() {
         </div>
       </aside>
 
+      {/* ── Drag divider ── */}
+      <div
+        onMouseDown={onDividerMouseDown}
+        className="w-1 flex-shrink-0 bg-gray-800 hover:bg-purple-600 cursor-col-resize transition-colors"
+      />
+
       {/* ── Right panel: preview + downloads ── */}
       <main className="flex-1 flex flex-col overflow-hidden">
 
@@ -257,14 +357,21 @@ export default function HyMotionPage() {
         {/* Downloads — only shown after generation */}
         {downloadFiles.length > 0 && (
           <div className="flex-shrink-0 border-t border-gray-800 bg-gray-900/60 px-5 py-3">
-            <p className="text-xs font-medium text-gray-300 mb-2">📦 Download FBX Files</p>
+            <p className="text-xs font-medium text-gray-300 mb-2">📦 下载动作文件</p>
             <div className="flex flex-wrap gap-3">
-              {downloadFiles.map((file, i) => (
-                <a key={i} href={file.url || file} download
-                  className="text-xs text-purple-400 hover:underline">
-                  📎 {file.name || `motion_${i + 1}.fbx`}
-                </a>
-              ))}
+              {downloadFiles.map((file, i) => {
+                const rawUrl = resolveFileUrl(file);
+                const filename = file?.orig_name || file?.name || `motion_${i + 1}.fbx`;
+                const proxyUrl = rawUrl
+                  ? `/api/hymotion/download?url=${encodeURIComponent(rawUrl)}&filename=${encodeURIComponent(filename)}`
+                  : null;
+                return proxyUrl ? (
+                  <a key={i} href={proxyUrl} download={filename}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-purple-900/30 hover:bg-purple-800/40 border border-purple-700/40 text-purple-300 hover:text-purple-200 text-xs font-medium transition">
+                    ⬇ {filename}
+                  </a>
+                ) : null;
+              })}
             </div>
           </div>
         )}

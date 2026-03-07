@@ -115,11 +115,11 @@ function Model({ url, fileType = 'gltf', externalClips, savedPositionRef, mixerR
 
 // ── AnimPanel ──────────────────────────────────────────────────
 const AnimPanel = forwardRef(function AnimPanel({ onClipsChange, onNewItemsLoaded }, ref) {
-  const [isDragOver, setIsDragOver] = useState(false);
   const [clipItems, setClipItems] = useState([]);
   const [activeId, setActiveId] = useState(null);
   const [loadError, setLoadError] = useState(null);
   const [loading, setLoading] = useState(false);
+  const fileInputRef = useRef(null);
 
   const loadAnimFile = useCallback(async (file, { skipTimeline = false } = {}) => {
     setLoadError(null);
@@ -165,17 +165,12 @@ const AnimPanel = forwardRef(function AnimPanel({ onClipsChange, onNewItemsLoade
     }
   }, [onClipsChange, onNewItemsLoaded]);
 
-  const handleDrop = useCallback((e) => {
-    e.preventDefault(); setIsDragOver(false);
-    Array.from(e.dataTransfer.files).forEach(f => loadAnimFile(f));
-  }, [loadAnimFile]);
-
   const handleFileInput = useCallback((e) => {
     Array.from(e.target.files).forEach(f => loadAnimFile(f));
     e.target.value = '';
   }, [loadAnimFile]);
 
-  const playClip = useCallback((item) => { setActiveId(item.id); onClipsChange([item.clip]); }, [onClipsChange]);
+const playClip = useCallback((item) => { setActiveId(item.id); onClipsChange([item.clip]); }, [onClipsChange]);
   const playAll = useCallback((items) => { setActiveId('all'); onClipsChange(items.map(c => c.clip)); }, [onClipsChange]);
   const removeClip = useCallback((id, remaining) => {
     setClipItems(remaining);
@@ -205,27 +200,25 @@ const AnimPanel = forwardRef(function AnimPanel({ onClipsChange, onNewItemsLoade
           <p className="text-xs font-medium text-gray-300">动作文件</p>
           <p className="text-[10px] text-gray-600 mt-0.5">.fbx · .glb · .bvh</p>
         </div>
-        {clipItems.length > 1 && (
-          <button onClick={() => playAll(clipItems)}
-            className={`text-[10px] px-1.5 py-0.5 rounded transition ${activeId === 'all' ? 'bg-emerald-700 text-white' : 'bg-gray-800 text-gray-400 hover:text-white'}`}>
-            全部
+        <div className="flex items-center gap-1">
+          {clipItems.length > 1 && (
+            <button onClick={() => playAll(clipItems)}
+              className={`text-[10px] px-1.5 py-0.5 rounded transition ${activeId === 'all' ? 'bg-emerald-700 text-white' : 'bg-gray-800 text-gray-400 hover:text-white'}`}>
+              全部
+            </button>
+          )}
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={loading}
+            title="上传动作文件"
+            className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-700 hover:bg-indigo-600 disabled:opacity-50 text-white transition"
+          >
+            {loading ? '…' : '+ 上传'}
           </button>
-        )}
+          <input ref={fileInputRef} type="file" accept=".fbx,.glb,.gltf,.bvh" multiple className="hidden" onChange={handleFileInput} />
+        </div>
       </div>
-      <div className="flex-1 overflow-y-auto p-2 flex flex-col gap-2"
-        onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
-        onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setIsDragOver(false); }}
-        onDrop={handleDrop}>
-        <label className={`flex flex-col items-center justify-center gap-1.5 min-h-20 border-2 border-dashed rounded-lg p-3 cursor-pointer transition ${isDragOver ? 'border-indigo-500 bg-indigo-500/10' : 'border-gray-700 hover:border-gray-600'}`}>
-          <input type="file" accept=".fbx,.glb,.gltf,.bvh" multiple className="hidden" onChange={handleFileInput} />
-          {loading
-            ? <div className="w-4 h-4 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin" />
-            : <svg className="w-4 h-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-              </svg>
-          }
-          <p className="text-[10px] text-gray-500 text-center">拖入 / 点击添加</p>
-        </label>
+      <div className="flex-1 overflow-y-auto p-2 flex flex-col gap-2">
         {loadError && <p className="text-[10px] text-red-400 text-center">{loadError}</p>}
         {clipItems.length > 0 && (
           <div className="space-y-1">
