@@ -1,6 +1,33 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 
-function useResizable(defaultWidth = 384, min = 240, max = 640) {
+const HISTORY_KEY = 'hymotion_history';
+const MAX_HISTORY = 15;
+
+function loadHistory() {
+  try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); }
+  catch { return []; }
+}
+
+function saveHistoryToStorage(entries) {
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(entries));
+  } catch {
+    try {
+      const slim = entries.map(({ motionHtml: _h, ...rest }) => rest);
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(slim));
+    } catch { /* silent */ }
+  }
+}
+
+function timeAgo(iso) {
+  const diff = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (diff < 60) return '刚刚';
+  if (diff < 3600) return `${Math.floor(diff / 60)}分钟前`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}小时前`;
+  return `${Math.floor(diff / 86400)}天前`;
+}
+
+function useResizable(defaultWidth = 360, min = 240, max = 560) {
   const [width, setWidth] = useState(defaultWidth);
   const dragging = useRef(false);
   const startX = useRef(0);
@@ -37,7 +64,6 @@ function useResizable(defaultWidth = 384, min = 240, max = 640) {
   return { width, onMouseDown };
 }
 
-
 const EXAMPLE_PROMPTS = [
   { text: 'A person jumps upward with both legs twice.', duration: 4.5 },
   { text: 'A person jumps on their right leg.', duration: 4.5 },
@@ -58,16 +84,10 @@ const HF_SPACE = 'https://tencent-hy-motion-1-0.hf.space';
 
 function resolveFileUrl(file) {
   let url = null;
-  if (typeof file === 'string') {
-    url = file;
-  } else if (file?.url) {
-    url = file.url;
-  } else if (file?.path) {
-    // Gradio path like /tmp/gradio/xxx/file.fbx → full URL
-    url = `${HF_SPACE}/file=${file.path}`;
-  }
+  if (typeof file === 'string') { url = file; }
+  else if (file?.url) { url = file.url; }
+  else if (file?.path) { url = `${HF_SPACE}/file=${file.path}`; }
   if (!url) return null;
-  // Make relative URLs absolute
   if (url.startsWith('/')) url = `${HF_SPACE}${url}`;
   return url;
 }
@@ -76,25 +96,86 @@ function randomSeeds() {
   return Array.from({ length: 4 }, () => Math.floor(Math.random() * 1000)).join(',');
 }
 
+/* ── Section label ──────────────────────────────────────── */
+function SectionLabel({ children }) {
+  return (
+    <div className="flex items-center gap-2 mb-2">
+      <div className="w-1 h-3 rounded-full" style={{ background: 'var(--accent)' }} />
+      <span className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: 'var(--text-2)' }}>
+        {children}
+      </span>
+    </div>
+  );
+}
+
+/* ── Status badge ───────────────────────────────────────── */
+function StatusDot({ status }) {
+  const colors = {
+    success: '#10b981',
+    error:   '#f87171',
+    loading: 'var(--accent-hi)',
+    idle:    'var(--text-3)',
+  };
+  return (
+    <span className="inline-block w-1.5 h-1.5 rounded-full mr-1.5 flex-shrink-0"
+      style={{ background: colors[status] || colors.idle,
+        boxShadow: status === 'loading' ? `0 0 6px ${colors.loading}` : undefined }} />
+  );
+}
+
 export default function HyMotionPage() {
-  const { width: sidebarWidth, onMouseDown: onDividerMouseDown } = useResizable(384, 240, 640);
+  const { width: sidebarWidth, onMouseDown: onDividerMouseDown } = useResizable(360, 240, 560);
   const [prompt, setPrompt] = useState('');
   const [duration, setDuration] = useState(5.0);
   const [seeds, setSeeds] = useState('0,1,2,3');
   const [cfg, setCfg] = useState(5.0);
   const [status, setStatus] = useState('idle');
-  const [statusMsg, setStatusMsg] = useState('Ready. Enter a motion description and click Generate.');
+  const [statusMsg, setStatusMsg] = useState('Enter a motion description and click Generate.');
   const [motionHtml, setMotionHtml] = useState(null);
   const [downloadFiles, setDownloadFiles] = useState([]);
-  const [rewrittenPrompt, setRewrittenPrompt] = useState(null); // null = not yet rewritten
+  const [rewrittenPrompt, setRewrittenPrompt] = useState(null);
   const [isRewriting, setIsRewriting] = useState(false);
-  const [progress, setProgress] = useState(0);       // 0–100
-  const [progressStage, setProgressStage] = useState(''); // e.g. 'Submitting…'
-  const [retryCountdown, setRetryCountdown] = useState(null); // null or seconds remaining
+  const [progress, setProgress] = useState(0);
+  const [progressStage, setProgressStage] = useState('');
+  const [retryCountdown, setRetryCountdown] = useState(null);
+  const [history, setHistory] = useState(() => loadHistory());
   const iframeRef = useRef(null);
   const blobUrlRef = useRef(null);
   const progressTimerRef = useRef(null);
   const countdownTimerRef = useRef(null);
+
+  const addToHistory = useCallback((entry) => {
+    setHistory(prev => {
+      const updated = [entry, ...prev.filter(h => h.id !== entry.id)].slice(0, MAX_HISTORY);
+      saveHistoryToStorage(updated);
+      return updated;
+    });
+  }, []);
+
+  const handleDeleteHistory = useCallback((id) => {
+    setHistory(prev => {
+      const updated = prev.filter(h => h.id !== id);
+      saveHistoryToStorage(updated);
+      return updated;
+    });
+  }, []);
+
+  const handleLoadHistory = useCallback((item) => {
+    setPrompt(item.prompt);
+    setDuration(item.duration);
+    if (item.rewrittenPrompt) setRewrittenPrompt(item.rewrittenPrompt);
+    else setRewrittenPrompt(null);
+    setDownloadFiles(item.downloadFiles || []);
+    if (item.motionHtml) {
+      setMotionHtml(item.motionHtml);
+      setStatus('success');
+      setStatusMsg('已从历史记录加载。');
+    } else {
+      setMotionHtml(null);
+      setStatus('idle');
+      setStatusMsg('已加载参数，点击 Generate 重新生成。');
+    }
+  }, []);
 
   useEffect(() => {
     if (!motionHtml || !iframeRef.current) return;
@@ -142,7 +223,7 @@ export default function HyMotionPage() {
     progressTimerRef.current = setInterval(() => {
       setProgress(prev => {
         if (prev >= 92) { clearInterval(progressTimerRef.current); return prev; }
-        return prev + (92 - prev) * 0.018; // decelerates near 92%
+        return prev + (92 - prev) * 0.018;
       });
     }, 600);
   }, []);
@@ -181,9 +262,7 @@ export default function HyMotionPage() {
       body: JSON.stringify({
         original_text: originalText,
         rewritten_text: textToUse,
-        seeds,
-        duration,
-        cfg_scale: cfg,
+        seeds, duration, cfg_scale: cfg,
       }),
     });
 
@@ -196,10 +275,9 @@ export default function HyMotionPage() {
     if (!event_id) throw new Error('No event_id returned from server.');
 
     setProgressStage('Generating…');
-    setStatusMsg('Generating motion... This may take 1–3 minutes.');
+    setStatusMsg('Generating motion… This may take 1–3 minutes.');
     startProgress(18);
 
-    // Stream the SSE result — pass session_hash so Gradio can find the session
     const resultUrl = session_hash
       ? `${API_BASE}/result/${event_id}?session_hash=${session_hash}`
       : `${API_BASE}/result/${event_id}`;
@@ -213,31 +291,22 @@ export default function HyMotionPage() {
     let files = [];
     let lastError = null;
 
-    // Parse queue/data SSE format: each line is `data: {"msg":"...","output":{...}}`
     for (const line of text.split('\n')) {
       if (!line.startsWith('data:')) continue;
       const rawData = line.replace(/^data:\s*/, '').trim();
       if (!rawData) continue;
-
       let msg;
       try { msg = JSON.parse(rawData); } catch { continue; }
 
-      // Queue position / progress events
       if (msg.msg === 'estimation') {
         const eta = msg.rank_eta ? Math.round(msg.rank_eta) : null;
         if (eta) setStatusMsg(`In queue (position ${msg.rank ?? 0}, ~${eta}s wait)…`);
         continue;
       }
-      if (msg.msg === 'process_starts') continue;
-      if (msg.msg === 'close_stream') continue;
-      if (msg.msg === 'heartbeat') continue;
+      if (['process_starts','close_stream','heartbeat'].includes(msg.msg)) continue;
 
-      // Completion
       if (msg.msg === 'process_completed') {
-        if (!msg.success) {
-          lastError = msg.output?.error || 'Generation failed';
-          continue;
-        }
+        if (!msg.success) { lastError = msg.output?.error || 'Generation failed'; continue; }
         const resultData = msg.output?.data;
         if (Array.isArray(resultData)) {
           htmlContent = resultData[0] || null;
@@ -246,17 +315,13 @@ export default function HyMotionPage() {
         }
         break;
       }
-
-      // Fallback: generic error field
       if (msg.error) { lastError = String(msg.error); }
     }
 
     if (!htmlContent && !files.length) {
       const err = lastError || 'space_sleeping';
-      // ZeroGPU quota exhausted
-      if (err.includes('ZeroGPU') || err.includes('quota')) {
+      if (err.includes('ZeroGPU') || err.includes('quota'))
         throw new Error('ZeroGPU daily quota exhausted. Please use a different HF token or wait for quota reset.');
-      }
       throw new Error(err === 'space_sleeping' ? 'space_sleeping' : err);
     }
 
@@ -280,19 +345,26 @@ export default function HyMotionPage() {
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       try {
         const { htmlContent, files } = await doGenerate(textToUse, originalText);
-
-        console.log('[HyMotion] raw files from API:', JSON.stringify(files));
         setProgressStage('Done');
         finishProgress(true);
         setMotionHtml(htmlContent || '');
-        setDownloadFiles(Array.isArray(files) ? files : (files ? [files] : []));
+        const resolvedFiles = Array.isArray(files) ? files : (files ? [files] : []);
+        setDownloadFiles(resolvedFiles);
         setStatus('success');
         setStatusMsg('Motion generated successfully!');
+        addToHistory({
+          id: Date.now().toString(),
+          prompt: originalText,
+          rewrittenPrompt: textToUse !== originalText ? textToUse : null,
+          duration,
+          motionHtml: htmlContent || '',
+          downloadFiles: resolvedFiles,
+          createdAt: new Date().toISOString(),
+        });
         return;
       } catch (err) {
         console.error(`HyMotion attempt ${attempt + 1} error:`, err);
         const sleeping = err.message === 'space_sleeping' || isSleepingError(err.message);
-
         if (sleeping && attempt < MAX_RETRIES) {
           clearInterval(progressTimerRef.current);
           setProgress(0);
@@ -301,7 +373,6 @@ export default function HyMotionPage() {
           await startCountdown(RETRY_DELAY);
           continue;
         }
-
         finishProgress(false);
         setProgressStage('');
         setRetryCountdown(null);
@@ -312,226 +383,378 @@ export default function HyMotionPage() {
         return;
       }
     }
-  }, [prompt, rewrittenPrompt, doGenerate, finishProgress, startCountdown]);
+  }, [prompt, rewrittenPrompt, duration, doGenerate, finishProgress, startCountdown, addToHistory]);
+
+  /* ── Styles ────────────────────────────────────────────── */
+  const inputStyle = {
+    background: 'var(--bg-base)',
+    border: '1px solid var(--border)',
+    color: 'var(--text-1)',
+    borderRadius: 8,
+    fontSize: 13,
+    outline: 'none',
+    width: '100%',
+    resize: 'none',
+    padding: '10px 12px',
+    fontFamily: 'inherit',
+    transition: 'border-color 0.15s',
+  };
 
   return (
-    <div className="flex h-full overflow-hidden bg-gray-950">
+    <div className="flex h-full overflow-hidden" style={{ background: 'var(--bg-base)' }}>
 
-      {/* ── Left panel: controls ── */}
-      <aside style={{ width: sidebarWidth }} className="flex-shrink-0 bg-gray-900/50 flex flex-col overflow-y-auto">
-        <div className="p-4 space-y-3">
+      {/* ── Left panel ─────────────────────────────────────── */}
+      <aside style={{ width: sidebarWidth, background: 'var(--bg-surface)', borderRight: '1px solid var(--border)', flexShrink: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+        <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: 16 }}>
 
-          {/* Input Text */}
+          {/* Input */}
           <div>
-            <label className="block text-xs font-medium text-gray-300 mb-1.5">📝 Input Text</label>
+            <SectionLabel>Motion Description</SectionLabel>
             <textarea
               value={prompt}
               onChange={e => { setPrompt(e.target.value); setRewrittenPrompt(null); }}
               rows={4}
               placeholder={'Describe the motion, e.g.:\n"A person jumps up with both arms raised."'}
-              className="w-full px-3 py-2 bg-gray-900 border border-gray-700 text-gray-200 text-sm rounded-lg focus:outline-none focus:border-purple-500 placeholder-gray-600 resize-none"
+              style={inputStyle}
+              onFocus={e => e.target.style.borderColor = 'var(--accent)'}
+              onBlur={e => e.target.style.borderColor = 'var(--border)'}
             />
           </div>
 
-          {/* Rewrite button */}
+          {/* Rewrite */}
           <button
             onClick={handleRewrite}
             disabled={isRewriting || !prompt.trim()}
-            className={`w-full py-2 rounded-xl text-sm font-semibold transition ${
-              isRewriting
-                ? 'bg-gray-700/60 cursor-not-allowed text-gray-500'
-                : 'bg-gray-800 hover:bg-gray-700 border border-gray-600/50 hover:border-purple-600/50 text-gray-300 hover:text-white'
-            }`}
+            style={{
+              width: '100%',
+              padding: '8px 12px',
+              borderRadius: 8,
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: isRewriting || !prompt.trim() ? 'not-allowed' : 'pointer',
+              opacity: isRewriting || !prompt.trim() ? 0.4 : 1,
+              background: 'var(--bg-card)',
+              border: '1px solid var(--border)',
+              color: 'var(--text-2)',
+              fontFamily: 'inherit',
+              transition: 'all 0.15s',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 6,
+            }}
           >
-            {isRewriting ? '🔄 Rewriting...' : '🔄 Rewrite Text'}
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M1 4v6h6M23 20v-6h-6" strokeLinecap="round" strokeLinejoin="round"/>
+              <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10M23 14l-4.64 4.36A9 9 0 0 1 3.51 15" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+            {isRewriting ? 'Rewriting…' : 'Rewrite Text'}
           </button>
 
-          {/* Rewritten Prompt — shown after rewrite */}
+          {/* Rewritten prompt */}
           {rewrittenPrompt !== null && (
             <div>
-              <div className="flex items-center gap-2 mb-1.5">
-                <label className="text-xs font-medium text-gray-300">✏️ Rewritten Prompt</label>
-                <span className="text-[10px] text-gray-500 italic">auto-filled after rewrite, you can further edit</span>
-              </div>
+              <SectionLabel>Rewritten Prompt</SectionLabel>
               <textarea
                 value={rewrittenPrompt}
                 onChange={e => setRewrittenPrompt(e.target.value)}
                 rows={4}
-                className="w-full px-3 py-2 bg-gray-900/80 border border-purple-700/40 text-purple-100 text-sm rounded-lg focus:outline-none focus:border-purple-500 resize-none"
+                style={{ ...inputStyle, borderColor: 'var(--border-accent)', color: 'var(--accent-hi)' }}
+                onFocus={e => e.target.style.borderColor = 'var(--accent)'}
+                onBlur={e => e.target.style.borderColor = 'var(--border-accent)'}
               />
+              <p style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 4 }}>
+                Auto-filled after rewrite · editable
+              </p>
             </div>
           )}
 
           {/* Duration */}
           <div>
-            <label className="block text-xs font-medium text-gray-300 mb-1.5">
-              ⏱️ Duration: <span className="text-purple-400">{duration.toFixed(1)}s</span>
-            </label>
-            <input
-              type="range" min="0.5" max="12" step="0.1" value={duration}
+            <SectionLabel>Duration</SectionLabel>
+            <div className="flex items-center justify-between mb-2">
+              <span style={{ fontSize: 12, color: 'var(--text-2)' }}>Length</span>
+              <span className="font-mono text-xs" style={{ color: 'var(--accent-hi)' }}>{duration.toFixed(1)}s</span>
+            </div>
+            <input type="range" min="0.5" max="12" step="0.1" value={duration}
               onChange={e => setDuration(parseFloat(e.target.value))}
-              className="w-full accent-purple-500"
+              style={{ width: '100%' }}
             />
-            <div className="flex justify-between text-[10px] text-gray-600 mt-1"><span>0.5s</span><span>12s</span></div>
+            <div className="flex justify-between mt-1" style={{ fontSize: 10, color: 'var(--text-3)' }}>
+              <span>0.5s</span><span>12s</span>
+            </div>
           </div>
 
           {/* Advanced */}
-          <details className="border border-gray-700/50 rounded-lg">
-            <summary className="px-3 py-2 cursor-pointer text-xs font-medium text-gray-400 select-none">🔧 Advanced Settings</summary>
-            <div className="px-3 pb-3 space-y-3 pt-2">
+          <details style={{ border: '1px solid var(--border)', borderRadius: 8 }}>
+            <summary style={{ padding: '8px 12px', cursor: 'pointer', fontSize: 11, fontWeight: 600, color: 'var(--text-2)', userSelect: 'none', letterSpacing: '0.05em', textTransform: 'uppercase', listStyle: 'none', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span>Advanced Settings</span>
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M6 9l6 6 6-6" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            </summary>
+            <div style={{ padding: '0 12px 12px', display: 'flex', flexDirection: 'column', gap: 10 }}>
               <div>
-                <label className="block text-[11px] text-gray-500 mb-1.5">🎯 Random Seeds</label>
+                <div className="flex items-center justify-between mb-1.5">
+                  <span style={{ fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Random Seeds</span>
+                </div>
                 <div className="flex gap-2">
                   <input type="text" value={seeds} onChange={e => setSeeds(e.target.value)}
                     placeholder="0,1,2,3"
-                    className="flex-1 px-2 py-1.5 bg-gray-900 border border-gray-700 text-gray-200 text-xs rounded-lg focus:outline-none focus:border-purple-500"
+                    style={{ ...inputStyle, padding: '7px 10px', fontSize: 12 }}
+                    onFocus={e => e.target.style.borderColor = 'var(--accent)'}
+                    onBlur={e => e.target.style.borderColor = 'var(--border)'}
                   />
                   <button onClick={() => setSeeds(randomSeeds())}
-                    className="px-2.5 py-1.5 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm transition">🎲</button>
+                    style={{ flexShrink: 0, padding: '7px 10px', borderRadius: 8, background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text-2)', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>
+                    ⊛
+                  </button>
                 </div>
               </div>
               <div>
-                <label className="block text-[11px] text-gray-500 mb-1.5">
-                  ⚙️ CFG Strength: <span className="text-purple-400">{cfg.toFixed(1)}</span>
-                </label>
+                <div className="flex items-center justify-between mb-1.5">
+                  <span style={{ fontSize: 10, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>CFG Strength</span>
+                  <span className="font-mono" style={{ fontSize: 10, color: 'var(--accent-hi)' }}>{cfg.toFixed(1)}</span>
+                </div>
                 <input type="range" min="1" max="10" step="0.1" value={cfg}
                   onChange={e => setCfg(parseFloat(e.target.value))}
-                  className="w-full accent-purple-500" />
+                  style={{ width: '100%' }} />
               </div>
             </div>
           </details>
 
-          {/* Generate */}
+          {/* Generate button */}
           <button
             onClick={handleGenerate}
             disabled={status === 'loading'}
-            className={`w-full py-2.5 rounded-xl text-sm font-semibold text-white transition ${
-              status === 'loading'
-                ? 'bg-purple-800/60 cursor-not-allowed opacity-70'
-                : 'bg-gradient-to-r from-purple-600 to-violet-600 hover:from-purple-500 hover:to-violet-500 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-purple-900/40'
-            }`}
+            style={{
+              width: '100%',
+              padding: '11px 16px',
+              borderRadius: 10,
+              fontSize: 13,
+              fontWeight: 700,
+              color: '#fff',
+              border: 'none',
+              cursor: status === 'loading' ? 'not-allowed' : 'pointer',
+              opacity: status === 'loading' ? 0.6 : 1,
+              background: status === 'loading'
+                ? 'var(--bg-card)'
+                : 'linear-gradient(135deg, #7c3aed 0%, #4f46e5 100%)',
+              boxShadow: status === 'loading' ? 'none' : '0 0 20px var(--accent-glow)',
+              fontFamily: 'inherit',
+              letterSpacing: '0.02em',
+              transition: 'all 0.2s',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 8,
+            }}
           >
-            {status === 'loading' ? '⏳ Generating...' : '🚀 Generate Motion'}
+            {status === 'loading' ? (
+              <>
+                <span className="inline-block w-3.5 h-3.5 border border-purple-400 border-t-transparent rounded-full animate-spin" />
+                Generating…
+              </>
+            ) : (
+              <>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M5 3l14 9-14 9V3z"/>
+                </svg>
+                Generate Motion
+              </>
+            )}
           </button>
 
           {/* Status */}
-          <div className={`text-xs px-3 py-2 rounded-lg border ${
-            status === 'success' ? 'bg-emerald-900/30 border-emerald-700/40 text-emerald-400' :
-            status === 'error'   ? 'bg-red-900/30 border-red-700/40 text-red-400' :
-            status === 'loading' ? 'bg-gray-900/60 border-purple-800/40 text-gray-400' :
-            'bg-gray-800/40 border-gray-700/40 text-gray-500'
-          }`}>
+          <div style={{
+            fontSize: 12,
+            padding: '10px 12px',
+            borderRadius: 8,
+            border: '1px solid',
+            borderColor: status === 'success' ? 'rgba(16,185,129,0.25)'
+              : status === 'error'   ? 'rgba(248,113,113,0.25)'
+              : status === 'loading' ? 'var(--border-accent)'
+              : 'var(--border)',
+            background: status === 'success' ? 'rgba(16,185,129,0.06)'
+              : status === 'error'   ? 'rgba(248,113,113,0.06)'
+              : 'var(--bg-card)',
+          }}>
             {status === 'loading' ? (
               <div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <span className="text-purple-300 font-medium">{progressStage}</span>
+                <div className="flex items-center justify-between mb-2">
+                  <span style={{ fontSize: 11, color: 'var(--accent-hi)', fontWeight: 600 }}>{progressStage}</span>
                   {retryCountdown !== null
-                    ? <span className="text-yellow-400 tabular-nums font-medium">{retryCountdown}s</span>
-                    : <span className="text-gray-500 tabular-nums">{Math.round(progress)}%</span>
+                    ? <span className="font-mono" style={{ fontSize: 11, color: '#fbbf24' }}>{retryCountdown}s</span>
+                    : <span className="font-mono" style={{ fontSize: 11, color: 'var(--text-3)' }}>{Math.round(progress)}%</span>
                   }
                 </div>
-                {retryCountdown !== null ? (
-                  <div className="w-full bg-gray-800 rounded-full h-1 overflow-hidden">
-                    <div className="h-full rounded-full bg-yellow-500 transition-all duration-1000 ease-linear"
-                      style={{ width: `${(retryCountdown / 35) * 100}%` }} />
-                  </div>
-                ) : (
-                  <div className="w-full bg-gray-800 rounded-full h-1 overflow-hidden">
-                    <div
-                      className="h-full rounded-full bg-gradient-to-r from-purple-600 to-violet-400 transition-all duration-700 ease-out"
-                      style={{ width: `${progress}%` }}
-                    />
-                  </div>
-                )}
-                <p className="text-gray-600 mt-1.5 text-[10px] truncate">{statusMsg}</p>
+                <div style={{ width: '100%', height: 2, borderRadius: 1, background: 'var(--bg-base)', overflow: 'hidden' }}>
+                  {retryCountdown !== null
+                    ? <div style={{ height: '100%', borderRadius: 1, background: '#fbbf24', transition: 'width 1s linear', width: `${(retryCountdown / 35) * 100}%` }} />
+                    : <div style={{ height: '100%', borderRadius: 1, background: 'linear-gradient(90deg, var(--accent), var(--cyan))', transition: 'width 0.7s ease-out', width: `${progress}%` }} />
+                  }
+                </div>
+                <p style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{statusMsg}</p>
               </div>
-            ) : statusMsg}
+            ) : (
+              <div className="flex items-center gap-1.5">
+                <StatusDot status={status} />
+                <span style={{ color: status === 'success' ? '#10b981' : status === 'error' ? '#f87171' : 'var(--text-3)' }}>
+                  {statusMsg}
+                </span>
+              </div>
+            )}
           </div>
 
           {/* Example prompts */}
           <div>
-            <p className="text-xs font-medium text-gray-400 mb-2">📚 Example Prompts</p>
-            <div className="grid grid-cols-2 gap-1.5">
+            <SectionLabel>Example Prompts</SectionLabel>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
               {EXAMPLE_PROMPTS.map((ex, i) => (
                 <button key={i} onClick={() => useExample(ex)}
-                  className="text-left px-2 py-2 rounded-lg bg-gray-800/60 hover:bg-gray-700/60 border border-gray-700/40 hover:border-purple-600/40 transition group">
-                  <p className="text-[10px] text-gray-400 group-hover:text-white leading-tight line-clamp-2">{ex.text}</p>
-                  <p className="text-[9px] text-gray-600 mt-1">⏱ {ex.duration}s</p>
+                  style={{
+                    textAlign: 'left',
+                    padding: '8px 10px',
+                    borderRadius: 8,
+                    background: 'var(--bg-card)',
+                    border: '1px solid var(--border)',
+                    cursor: 'pointer',
+                    transition: 'all 0.15s',
+                    fontFamily: 'inherit',
+                  }}
+                  onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--border-accent)'; e.currentTarget.style.background = '#16162a'; }}
+                  onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.background = 'var(--bg-card)'; }}
+                >
+                  <p style={{ fontSize: 10, color: 'var(--text-2)', lineHeight: 1.4, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', margin: 0 }}>{ex.text}</p>
+                  <p className="font-mono" style={{ fontSize: 9, color: 'var(--text-3)', marginTop: 4 }}>{ex.duration}s</p>
                 </button>
               ))}
             </div>
           </div>
 
-        </div>
-      </aside>
-
-      {/* ── Drag divider ── */}
-      <div
-        onMouseDown={onDividerMouseDown}
-        className="w-1 flex-shrink-0 bg-gray-800 hover:bg-purple-600 cursor-col-resize transition-colors"
-      />
-
-      {/* ── Right panel: preview + downloads ── */}
-      <main className="flex-1 flex flex-col overflow-hidden">
-
-        {/* Preview */}
-        <div className="flex-1 relative bg-gray-950">
-          {!motionHtml && status !== 'loading' && (
-            <div className="absolute inset-0 flex items-center justify-center text-gray-600 pointer-events-none">
-              <div className="text-center">
-                <div className="text-6xl mb-4">🎬</div>
-                <p className="text-sm">3D motion visualization will appear here</p>
-                <p className="text-xs mt-2 text-gray-700">Enter a description and click Generate</p>
+          {/* History */}
+          {history.length > 0 && (
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <SectionLabel>History</SectionLabel>
+                <span style={{ fontSize: 9, color: 'var(--text-3)' }}>{history.length} entries</span>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {history.map((item) => (
+                  <div
+                    key={item.id}
+                    style={{
+                      display: 'flex', alignItems: 'flex-start', gap: 8,
+                      padding: '10px 10px',
+                      borderRadius: 8,
+                      background: 'var(--bg-card)',
+                      border: '1px solid var(--border)',
+                      cursor: 'pointer',
+                      transition: 'all 0.15s',
+                    }}
+                    onClick={() => handleLoadHistory(item)}
+                    onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--border-accent)'; e.currentTarget.style.background = '#16162a'; }}
+                    onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.background = 'var(--bg-card)'; }}
+                  >
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <p style={{ fontSize: 10, color: 'var(--text-1)', lineHeight: 1.4, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', margin: 0 }}>
+                        {item.prompt}
+                      </p>
+                      <div style={{ display: 'flex', gap: 8, marginTop: 4, alignItems: 'center' }}>
+                        <span className="font-mono" style={{ fontSize: 9, color: 'var(--accent-hi)' }}>{item.duration}s</span>
+                        <span style={{ fontSize: 9, color: 'var(--text-3)' }}>{timeAgo(item.createdAt)}</span>
+                        {item.downloadFiles?.length > 0 && (
+                          <span style={{ fontSize: 9, color: 'var(--text-3)' }}>· {item.downloadFiles.length} files</span>
+                        )}
+                      </div>
+                    </div>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleDeleteHistory(item.id); }}
+                      style={{ flexShrink: 0, background: 'none', border: 'none', color: 'var(--text-3)', fontSize: 12, cursor: 'pointer', opacity: 0, transition: 'opacity 0.15s, color 0.15s', paddingTop: 1 }}
+                      onMouseEnter={e => { e.currentTarget.style.color = '#f87171'; e.currentTarget.style.opacity = '1'; }}
+                      onMouseLeave={e => { e.currentTarget.style.color = 'var(--text-3)'; e.currentTarget.style.opacity = '0'; }}
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
               </div>
             </div>
           )}
+
+        </div>
+      </aside>
+
+      {/* ── Drag divider ─────────────────────────────────────── */}
+      <div
+        onMouseDown={onDividerMouseDown}
+        style={{ width: 1, flexShrink: 0, background: 'var(--border)', cursor: 'col-resize', transition: 'background 0.15s' }}
+        onMouseEnter={e => e.currentTarget.style.background = 'var(--accent)'}
+        onMouseLeave={e => e.currentTarget.style.background = 'var(--border)'}
+      />
+
+      {/* ── Right panel ──────────────────────────────────────── */}
+      <main style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+
+        {/* Preview */}
+        <div style={{ flex: 1, position: 'relative', background: 'var(--bg-base)' }}
+          className="dot-grid">
+          {!motionHtml && status !== 'loading' && (
+            <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
+              <div style={{ textAlign: 'center' }}>
+                {/* Geometric figure */}
+                <div style={{ width: 80, height: 80, margin: '0 auto 20px', borderRadius: 16, border: '1px solid var(--border)', background: 'var(--bg-card)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.2" style={{ color: 'var(--text-3)' }}>
+                    <circle cx="12" cy="5" r="2"/>
+                    <path d="M12 7v6M9 9l3 2 3-2M9 16l3-3 3 3M9 16v3M15 16v3" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                </div>
+                <p style={{ fontSize: 13, color: 'var(--text-2)', fontWeight: 500 }}>3D motion visualization will appear here</p>
+                <p style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 6 }}>Enter a description and click Generate</p>
+              </div>
+            </div>
+          )}
+
           {status === 'loading' && !motionHtml && (
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-              <div className="w-80 text-center">
-                {/* Spinner */}
-                <div className="w-12 h-12 border-2 border-purple-500 border-t-transparent rounded-full animate-spin mx-auto mb-6" />
+            <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
+              <div style={{ textAlign: 'center', width: 280 }}>
+                {/* Spinner ring */}
+                <div style={{ width: 48, height: 48, margin: '0 auto 20px', border: '1.5px solid var(--border)', borderTop: '1.5px solid var(--accent-hi)', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
 
-                {/* Stage label */}
-                <p className="text-sm font-medium text-purple-300 mb-1">{progressStage}</p>
-                {retryCountdown !== null ? (
-                  <p className="text-xs text-yellow-400 mb-4">Retrying in {retryCountdown}s…</p>
-                ) : (
-                  <p className="text-xs text-gray-500 mb-4">This may take 1–3 minutes</p>
-                )}
+                <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--accent-hi)', marginBottom: 6 }}>{progressStage}</p>
+                {retryCountdown !== null
+                  ? <p style={{ fontSize: 11, color: '#fbbf24', marginBottom: 16 }}>Retrying in {retryCountdown}s…</p>
+                  : <p style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 16 }}>This may take 1–3 minutes</p>
+                }
 
-                {/* Progress bar */}
-                {retryCountdown !== null ? (
-                  <div className="w-full bg-gray-800 rounded-full h-1.5 overflow-hidden">
-                    <div className="h-full rounded-full bg-yellow-500 transition-all duration-1000 ease-linear"
-                      style={{ width: `${(retryCountdown / 35) * 100}%` }} />
-                  </div>
-                ) : (
-                  <div className="w-full bg-gray-800 rounded-full h-1.5 overflow-hidden">
-                    <div
-                      className="h-full rounded-full bg-gradient-to-r from-purple-600 to-violet-400 transition-all duration-700 ease-out"
-                      style={{ width: `${progress}%` }}
-                    />
-                  </div>
-                )}
-                <p className="text-[10px] text-gray-600 mt-2 tabular-nums">
+                <div style={{ height: 2, borderRadius: 1, background: 'var(--bg-card)', overflow: 'hidden' }}>
+                  {retryCountdown !== null
+                    ? <div style={{ height: '100%', background: '#fbbf24', transition: 'width 1s linear', width: `${(retryCountdown / 35) * 100}%` }} />
+                    : <div style={{ height: '100%', background: 'linear-gradient(90deg, var(--accent), var(--cyan))', transition: 'width 0.7s ease-out', width: `${progress}%` }} />
+                  }
+                </div>
+                <p className="font-mono" style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 8 }}>
                   {retryCountdown !== null ? `Auto-retry in ${retryCountdown}s` : `${Math.round(progress)}%`}
                 </p>
               </div>
             </div>
           )}
+
           <iframe
             ref={iframeRef}
             title="Motion Preview"
-            className={`w-full h-full border-0 ${motionHtml ? 'block' : 'hidden'}`}
+            style={{ width: '100%', height: '100%', border: 'none', display: motionHtml ? 'block' : 'none' }}
             sandbox="allow-scripts allow-same-origin"
           />
         </div>
 
-        {/* Downloads — only shown after generation */}
+        {/* Downloads */}
         {downloadFiles.length > 0 && (
-          <div className="flex-shrink-0 border-t border-gray-800 bg-gray-900/60 px-5 py-3">
-            <p className="text-xs font-medium text-gray-300 mb-2">📦 下载动作文件</p>
-            <div className="flex flex-wrap gap-3">
+          <div style={{ flexShrink: 0, borderTop: '1px solid var(--border)', background: 'var(--bg-surface)', padding: '12px 20px' }}>
+            <p style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-2)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 10 }}>
+              Download Motion Files
+            </p>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
               {downloadFiles.map((file, i) => {
                 const rawUrl = resolveFileUrl(file);
                 const filename = file?.orig_name || file?.name || `motion_${i + 1}.fbx`;
@@ -540,8 +763,25 @@ export default function HyMotionPage() {
                   : null;
                 return proxyUrl ? (
                   <a key={i} href={proxyUrl} download={filename}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-purple-900/30 hover:bg-purple-800/40 border border-purple-700/40 text-purple-300 hover:text-purple-200 text-xs font-medium transition">
-                    ⬇ {filename}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 6,
+                      padding: '7px 14px',
+                      borderRadius: 8,
+                      background: 'rgba(124,58,237,0.1)',
+                      border: '1px solid var(--border-accent)',
+                      color: 'var(--accent-hi)',
+                      fontSize: 11,
+                      fontWeight: 600,
+                      textDecoration: 'none',
+                      transition: 'all 0.15s',
+                    }}
+                    onMouseEnter={e => { e.currentTarget.style.background = 'rgba(124,58,237,0.2)'; }}
+                    onMouseLeave={e => { e.currentTarget.style.background = 'rgba(124,58,237,0.1)'; }}
+                  >
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>
+                    {filename}
                   </a>
                 ) : null;
               })}
@@ -550,6 +790,8 @@ export default function HyMotionPage() {
         )}
 
       </main>
+
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   );
 }

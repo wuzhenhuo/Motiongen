@@ -16,13 +16,10 @@ app.use('/api/tripo', tripoRoutes);
 app.use('/api/hymotion', hymotionRoutes);
 
 // Health check
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', hasApiKey: !!process.env.TRIPO_API_KEY });
+app.get('/api/health', (_req, res) => {
+  res.json({ status: 'ok' });
 });
 
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
-  if (!process.env.TRIPO_API_KEY) {
-    console.warn('WARNING: TRIPO_API_KEY not set. Copy .env.example to .env and add your key.');
-  }
 });

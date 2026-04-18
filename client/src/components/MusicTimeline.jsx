@@ -2,8 +2,8 @@ import { useState, useRef, useCallback, useEffect, forwardRef, useImperativeHand
 
 const PX_PER_SEC = 50;
 const TOTAL_SECS = 120;
-const RULER_OFFSET = 116; // px for left label column
-const TRACK_H = 44; // px per track row
+const RULER_OFFSET = 116;
+const TRACK_H = 44;
 
 function formatTime(secs) {
   const s = Math.max(0, secs);
@@ -12,40 +12,33 @@ function formatTime(secs) {
   return `${m}:${String(sec).padStart(2, '0')}`;
 }
 
-// Action track colors (warm)
+// Clip colors — work on both themes
 const ACTION_COLORS = [
-  'bg-orange-600/80 border-orange-500/60',
-  'bg-amber-600/80 border-amber-500/60',
-  'bg-yellow-600/80 border-yellow-500/60',
-  'bg-rose-600/80 border-rose-500/60',
-  'bg-red-600/80 border-red-500/60',
+  { bg: 'rgba(234,88,12,0.75)',  border: 'rgba(249,115,22,0.5)'  },
+  { bg: 'rgba(180,83,9,0.75)',   border: 'rgba(217,119,6,0.5)'   },
+  { bg: 'rgba(202,138,4,0.75)',  border: 'rgba(234,179,8,0.5)'   },
+  { bg: 'rgba(190,18,60,0.75)',  border: 'rgba(244,63,94,0.5)'   },
+  { bg: 'rgba(185,28,28,0.75)',  border: 'rgba(239,68,68,0.5)'   },
 ];
 
-// Music track colors (cool)
 const MUSIC_COLORS = [
-  'bg-indigo-600/80 border-indigo-500/60',
-  'bg-violet-600/80 border-violet-500/60',
-  'bg-fuchsia-600/80 border-fuchsia-500/60',
-  'bg-sky-600/80 border-sky-500/60',
-  'bg-emerald-600/80 border-emerald-500/60',
+  { bg: 'rgba(79,70,229,0.75)',  border: 'rgba(99,102,241,0.5)'  },
+  { bg: 'rgba(124,58,237,0.75)', border: 'rgba(167,139,250,0.5)' },
+  { bg: 'rgba(168,85,247,0.75)', border: 'rgba(216,180,254,0.5)' },
+  { bg: 'rgba(2,132,199,0.75)',  border: 'rgba(56,189,248,0.5)'  },
+  { bg: 'rgba(4,120,87,0.75)',   border: 'rgba(52,211,153,0.5)'  },
 ];
 
-// Time ruler markers every 5 seconds
 const MARKERS = Array.from({ length: Math.floor(TOTAL_SECS / 5) + 1 }, (_, i) => i * 5);
 
-function TrackRow({ track, colorClass, onMouseDown, onDelete, icon, isSelected, onSelect }) {
+function TrackRow({ track, color, onMouseDown, onDelete, icon, isSelected, onSelect }) {
   return (
     <div className="relative flex items-center group/row" style={{ height: TRACK_H }}>
       {/* Label column */}
-      <div
-        style={{ width: RULER_OFFSET }}
-        className="flex-shrink-0 flex items-center gap-1.5 px-2 border-r border-gray-800/60"
-      >
+      <div style={{ width: RULER_OFFSET, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 6, padding: '0 8px', borderRight: '1px solid var(--border)' }}>
         {icon}
-        <span
-          className="text-[10px] text-gray-500 truncate flex-1"
-          title={track.name}
-        >
+        <span style={{ fontSize: 10, color: 'var(--text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}
+          title={track.name}>
           {track.name.replace(/\.[^.]+$/, '')}
         </span>
       </div>
@@ -59,25 +52,42 @@ function TrackRow({ track, colorClass, onMouseDown, onDelete, icon, isSelected, 
           height: TRACK_H - 10,
           left: RULER_OFFSET + track.offset * PX_PER_SEC,
           width: Math.max(track.duration * PX_PER_SEC, 48),
+          background: color.bg,
+          border: `1px solid ${color.border}`,
+          borderRadius: 6,
+          cursor: 'grab',
+          display: 'flex', alignItems: 'center', padding: '0 8px',
+          userSelect: 'none', overflow: 'visible',
+          boxShadow: isSelected ? `0 0 0 2px rgba(255,255,255,0.5)` : 'none',
         }}
-        className={`rounded border cursor-grab active:cursor-grabbing flex items-center px-2 select-none overflow-visible ${colorClass} ${isSelected ? 'ring-2 ring-white/70' : ''}`}
+        className="active:cursor-grabbing"
       >
-        {/* Delete button — visible on hover or when selected */}
+        {/* Delete button */}
         <button
           onMouseDown={(e) => e.stopPropagation()}
           onClick={(e) => { e.stopPropagation(); onDelete(track.id); }}
-          className={`absolute -top-1.5 -left-1.5 w-4 h-4 rounded-full bg-gray-900 border border-gray-600 flex items-center justify-center text-gray-300 hover:bg-red-600 hover:border-red-500 hover:text-white transition z-20 ${isSelected ? 'opacity-100' : 'opacity-0 group-hover/row:opacity-100'}`}
-          title="删除 (Delete)"
+          style={{
+            position: 'absolute', top: -6, left: -6,
+            width: 16, height: 16, borderRadius: '50%',
+            background: 'var(--bg-card)', border: '1px solid var(--border)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            color: 'var(--text-2)', cursor: 'pointer', zIndex: 20,
+            opacity: isSelected ? 1 : 0, transition: 'opacity 0.15s, background 0.15s',
+          }}
+          className="group/row-hover:opacity-100"
+          title="删除"
+          onMouseEnter={e => { e.currentTarget.style.background = '#dc2626'; e.currentTarget.style.color = '#fff'; e.currentTarget.style.opacity = '1'; }}
+          onMouseLeave={e => { e.currentTarget.style.background = 'var(--bg-card)'; e.currentTarget.style.color = 'var(--text-2)'; if (!isSelected) e.currentTarget.style.opacity = '0'; }}
         >
-          <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg width="8" height="8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" />
           </svg>
         </button>
 
-        <span className="text-[11px] text-white/90 truncate flex-1">
+        <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.9)', overflow: 'hidden', textOverflow: 'ellipsis', flex: 1 }}>
           {track.name.replace(/\.[^.]+$/, '')}
         </span>
-        <span className="text-[10px] text-white/50 flex-shrink-0 pl-2">
+        <span className="font-mono" style={{ fontSize: 10, color: 'rgba(255,255,255,0.5)', flexShrink: 0, paddingLeft: 8 }}>
           {formatTime(track.duration)}
         </span>
       </div>
@@ -85,12 +95,17 @@ function TrackRow({ track, colorClass, onMouseDown, onDelete, icon, isSelected, 
   );
 }
 
+const MIN_H = 100;
+const MAX_H = 520;
+const DEFAULT_H = 200;
+
 const MusicTimeline = forwardRef(function MusicTimeline({ actionTracks = [], onActionTracksChange, onPlayStart, onPlayStop, onAnimFileLoad, onPreviewModel, onActionDelete }, ref) {
   const [musicTracks, setMusicTracks] = useState([]);
   const [isPlaying, setIsPlaying] = useState(false);
   const [playhead, setPlayhead] = useState(0);
-  // { id, type: 'action' | 'music' } | null
   const [selected, setSelected] = useState(null);
+  const [panelH, setPanelH] = useState(DEFAULT_H);
+  const resizeDragRef = useRef(null);
 
   const fileInputRef = useRef(null);
   const actionFileInputRef = useRef(null);
@@ -101,13 +116,11 @@ const MusicTimeline = forwardRef(function MusicTimeline({ actionTracks = [], onA
   const pendingTimers = useRef([]);
   const dragRef = useRef(null);
   const timelineRef = useRef(null);
-  // Keep callbacks in refs to avoid stale closures
   const onPlayStartRef = useRef(onPlayStart);
   const onPlayStopRef = useRef(onPlayStop);
   useEffect(() => { onPlayStartRef.current = onPlayStart; }, [onPlayStart]);
   useEffect(() => { onPlayStopRef.current = onPlayStop; }, [onPlayStop]);
 
-  // Undo history
   const historyRef = useRef([]);
   const actionTracksRef = useRef(actionTracks);
   const musicTracksRef = useRef(musicTracks);
@@ -130,7 +143,6 @@ const MusicTimeline = forwardRef(function MusicTimeline({ actionTracks = [], onA
     setSelected(null);
   }, [onActionTracksChange]);
 
-  // Upload action file
   const handleActionUpload = useCallback((e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -138,19 +150,14 @@ const MusicTimeline = forwardRef(function MusicTimeline({ actionTracks = [], onA
     const ext = file.name.split('.').pop().toLowerCase();
     const url = URL.createObjectURL(file);
     onActionTracksChange?.(prev => [...prev, {
-      id: Date.now(),
-      name: file.name,
-      duration: 8,
-      offset: 0,
-      fileType: ext,
-      colorIdx: prev.length,
+      id: Date.now(), name: file.name, duration: 8,
+      offset: 0, fileType: ext, colorIdx: prev.length,
     }]);
     onAnimFileLoad?.(file);
     onPreviewModel?.(url, file.name, ext);
     e.target.value = '';
   }, [saveSnapshot, onActionTracksChange, onAnimFileLoad, onPreviewModel]);
 
-  // Upload music
   const handleUpload = useCallback((e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -161,17 +168,13 @@ const MusicTimeline = forwardRef(function MusicTimeline({ actionTracks = [], onA
     audioEls.current[id] = audio;
     audio.addEventListener('loadedmetadata', () => {
       setMusicTracks(prev => [...prev, {
-        id,
-        name: file.name,
-        duration: audio.duration,
-        offset: 0,
-        colorIdx: prev.length % MUSIC_COLORS.length,
+        id, name: file.name, duration: audio.duration,
+        offset: 0, colorIdx: prev.length % MUSIC_COLORS.length,
       }]);
     }, { once: true });
     e.target.value = '';
   }, []);
 
-  // Stop all playback
   const stopPlayback = useCallback(() => {
     pendingTimers.current.forEach(clearTimeout);
     pendingTimers.current = [];
@@ -181,7 +184,6 @@ const MusicTimeline = forwardRef(function MusicTimeline({ actionTracks = [], onA
     onPlayStopRef.current?.();
   }, []);
 
-  // Play / pause — drives both music and action tracks
   const handlePlayPause = useCallback(() => {
     if (isPlaying) { stopPlayback(); return; }
     const totalTracks = actionTracks.length + musicTracks.length;
@@ -191,27 +193,19 @@ const MusicTimeline = forwardRef(function MusicTimeline({ actionTracks = [], onA
     playStartHead.current = head;
     playStartWall.current = performance.now();
 
-    // Schedule each music track
     musicTracks.forEach(({ id, offset, duration }) => {
       const audio = audioEls.current[id];
       if (!audio) return;
       const startIn = offset - head;
       if (startIn <= 0) {
         const seekTo = -startIn;
-        if (seekTo < duration) {
-          audio.currentTime = seekTo;
-          audio.play().catch(() => {});
-        }
+        if (seekTo < duration) { audio.currentTime = seekTo; audio.play().catch(() => {}); }
       } else {
-        const t = setTimeout(() => {
-          audio.currentTime = 0;
-          audio.play().catch(() => {});
-        }, startIn * 1000);
+        const t = setTimeout(() => { audio.currentTime = 0; audio.play().catch(() => {}); }, startIn * 1000);
         pendingTimers.current.push(t);
       }
     });
 
-    // Advance playhead (covers both music and action track visual sync)
     const tick = () => {
       const elapsed = (performance.now() - playStartWall.current) / 1000;
       const newHead = playStartHead.current + elapsed;
@@ -225,7 +219,7 @@ const MusicTimeline = forwardRef(function MusicTimeline({ actionTracks = [], onA
     };
     rafRef.current = requestAnimationFrame(tick);
     setIsPlaying(true);
-    onPlayStartRef.current?.();
+    onPlayStartRef.current?.({ actionTracks: actionTracksRef.current, playhead: head });
   }, [isPlaying, playhead, musicTracks, actionTracks, stopPlayback]);
 
   const handleStop = useCallback(() => {
@@ -233,7 +227,6 @@ const MusicTimeline = forwardRef(function MusicTimeline({ actionTracks = [], onA
     setPlayhead(0);
   }, [stopPlayback]);
 
-  // Delete handlers
   const handleDeleteMusic = useCallback((id) => {
     saveSnapshot();
     const audio = audioEls.current[id];
@@ -250,15 +243,10 @@ const MusicTimeline = forwardRef(function MusicTimeline({ actionTracks = [], onA
     setSelected(s => s?.id === id ? null : s);
   }, [saveSnapshot, onActionTracksChange, onActionDelete]);
 
-  // Keyboard shortcuts: Delete to remove selected track, Ctrl+Z to undo
   useEffect(() => {
     const onKeyDown = (e) => {
       if (['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName)) return;
-      if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
-        e.preventDefault();
-        undo();
-        return;
-      }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z') { e.preventDefault(); undo(); return; }
       if (e.key !== 'Delete' && e.key !== 'Backspace') return;
       if (!selected) return;
       if (selected.type === 'action') handleDeleteAction(selected.id);
@@ -268,7 +256,6 @@ const MusicTimeline = forwardRef(function MusicTimeline({ actionTracks = [], onA
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [selected, handleDeleteAction, handleDeleteMusic, undo]);
 
-  // Mouse drag
   const onClipMouseDown = useCallback((e, trackId, type) => {
     e.preventDefault();
     const tracks = type === 'action' ? actionTracks : musicTracks;
@@ -283,7 +270,6 @@ const MusicTimeline = forwardRef(function MusicTimeline({ actionTracks = [], onA
     const { trackId, type, startX, startOffset } = dragRef.current;
     const dx = e.clientX - startX;
     const newOffset = Math.max(0, startOffset + dx / PX_PER_SEC);
-
     const dy = e.clientY - dragRef.current.lastY;
     const rowShift = Math.round(dy / TRACK_H);
 
@@ -296,10 +282,7 @@ const MusicTimeline = forwardRef(function MusicTimeline({ actionTracks = [], onA
           if (fromIdx === -1) return arr.map(t => t.id === trackId ? { ...t, offset: newOffset } : t);
           const toIdx = Math.max(0, Math.min(arr.length - 1, fromIdx + rowShift));
           arr[fromIdx] = { ...arr[fromIdx], offset: newOffset };
-          if (fromIdx !== toIdx) {
-            const [item] = arr.splice(fromIdx, 1);
-            arr.splice(toIdx, 0, item);
-          }
+          if (fromIdx !== toIdx) { const [item] = arr.splice(fromIdx, 1); arr.splice(toIdx, 0, item); }
           return arr;
         });
       } else {
@@ -314,10 +297,7 @@ const MusicTimeline = forwardRef(function MusicTimeline({ actionTracks = [], onA
           if (fromIdx === -1) return arr.map(t => t.id === trackId ? { ...t, offset: newOffset } : t);
           const toIdx = Math.max(0, Math.min(arr.length - 1, fromIdx + rowShift));
           arr[fromIdx] = { ...arr[fromIdx], offset: newOffset };
-          if (fromIdx !== toIdx) {
-            const [item] = arr.splice(fromIdx, 1);
-            arr.splice(toIdx, 0, item);
-          }
+          if (fromIdx !== toIdx) { const [item] = arr.splice(fromIdx, 1); arr.splice(toIdx, 0, item); }
           return arr;
         });
       } else {
@@ -328,7 +308,20 @@ const MusicTimeline = forwardRef(function MusicTimeline({ actionTracks = [], onA
 
   const onMouseUp = useCallback(() => { dragRef.current = null; }, []);
 
-  // Click ruler to seek
+  const onResizeMouseDown = useCallback((e) => {
+    e.preventDefault();
+    resizeDragRef.current = { startY: e.clientY, startH: panelH };
+  }, [panelH]);
+
+  const onResizeMouseMove = useCallback((e) => {
+    if (!resizeDragRef.current) return;
+    const dy = resizeDragRef.current.startY - e.clientY; // drag up = increase height
+    const newH = Math.min(MAX_H, Math.max(MIN_H, resizeDragRef.current.startH + dy));
+    setPanelH(newH);
+  }, []);
+
+  const onResizeMouseUp = useCallback(() => { resizeDragRef.current = null; }, []);
+
   const onRulerClick = useCallback((e) => {
     if (!timelineRef.current) return;
     const rect = timelineRef.current.getBoundingClientRect();
@@ -339,11 +332,15 @@ const MusicTimeline = forwardRef(function MusicTimeline({ actionTracks = [], onA
   useEffect(() => {
     window.addEventListener('mousemove', onMouseMove);
     window.addEventListener('mouseup', onMouseUp);
+    window.addEventListener('mousemove', onResizeMouseMove);
+    window.addEventListener('mouseup', onResizeMouseUp);
     return () => {
       window.removeEventListener('mousemove', onMouseMove);
       window.removeEventListener('mouseup', onMouseUp);
+      window.removeEventListener('mousemove', onResizeMouseMove);
+      window.removeEventListener('mouseup', onResizeMouseUp);
     };
-  }, [onMouseMove, onMouseUp]);
+  }, [onMouseMove, onMouseUp, onResizeMouseMove, onResizeMouseUp]);
 
   useEffect(() => {
     return () => {
@@ -353,19 +350,16 @@ const MusicTimeline = forwardRef(function MusicTimeline({ actionTracks = [], onA
   }, [stopPlayback]);
 
   useImperativeHandle(ref, () => ({
-    startPlay() {
-      if (!isPlaying) handlePlayPause();
-    },
-    stopPlay() {
-      if (isPlaying) stopPlayback();
-    },
+    startPlay() { if (!isPlaying) handlePlayPause(); },
+    stopPlay() { if (isPlaying) stopPlayback(); },
   }), [isPlaying, handlePlayPause, stopPlayback]);
 
   const totalTracks = actionTracks.length + musicTracks.length;
   const timelineHeight = totalTracks === 0 ? 36 : totalTracks * TRACK_H;
 
   const ActionIcon = (
-    <svg className="w-3 h-3 text-orange-400/70 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"
+      style={{ color: 'rgba(251,146,60,0.8)', flexShrink: 0 }}>
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
         d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
@@ -374,23 +368,46 @@ const MusicTimeline = forwardRef(function MusicTimeline({ actionTracks = [], onA
   );
 
   const MusicIcon = (
-    <svg className="w-3 h-3 text-indigo-400/70 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
+    <svg width="12" height="12" fill="currentColor" viewBox="0 0 24 24"
+      style={{ color: 'rgba(129,140,248,0.8)', flexShrink: 0 }}>
       <path d="M9 19V6l12-3v13M9 19c0 1.1-1.34 2-3 2s-3-.9-3-2 1.34-2 3-2 3 .9 3 2zm12-3c0 1.1-1.34 2-3 2s-3-.9-3-2 1.34-2 3-2 3 .9 3 2z" />
     </svg>
   );
 
+  /* ── Icon button helper ── */
+  const iconBtnStyle = {
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    width: 28, height: 28, borderRadius: 6,
+    background: 'var(--bg-card)', border: '1px solid var(--border)',
+    color: 'var(--text-2)', cursor: 'pointer', transition: 'all 0.15s',
+  };
+
   return (
-    <div className="flex-shrink-0 border-t border-gray-800 bg-gray-900/90 backdrop-blur">
+    <div className="flex-shrink-0" style={{ height: panelH, display: 'flex', flexDirection: 'column', background: 'var(--bg-surface)' }}>
+
+      {/* Resize handle */}
+      <div
+        onMouseDown={onResizeMouseDown}
+        style={{
+          flexShrink: 0, height: 6, cursor: 'ns-resize',
+          borderTop: '1px solid var(--border)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          background: 'var(--bg-surface)',
+        }}
+        onMouseEnter={e => e.currentTarget.style.background = 'var(--border-accent)'}
+        onMouseLeave={e => e.currentTarget.style.background = 'var(--bg-surface)'}
+      >
+        <div style={{ width: 32, height: 2, borderRadius: 1, background: 'var(--border)' }} />
+      </div>
 
       {/* Controls bar */}
-      <div className="flex items-center gap-2 px-4 py-2 border-b border-gray-800/60">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px', borderBottom: '1px solid var(--border)' }}>
+
         {/* Stop */}
-        <button
-          onClick={handleStop}
-          title="停止并归零"
-          className="flex items-center justify-center w-7 h-7 rounded bg-gray-700 hover:bg-gray-600 transition"
-        >
-          <svg className="w-3.5 h-3.5 text-gray-300" fill="currentColor" viewBox="0 0 24 24">
+        <button onClick={handleStop} title="停止并归零" style={iconBtnStyle}
+          onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--border-accent)'; e.currentTarget.style.color = 'var(--text-1)'; }}
+          onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.color = 'var(--text-2)'; }}>
+          <svg width="12" height="12" fill="currentColor" viewBox="0 0 24 24">
             <rect x="5" y="5" width="14" height="14" rx="1" />
           </svg>
         </button>
@@ -400,33 +417,49 @@ const MusicTimeline = forwardRef(function MusicTimeline({ actionTracks = [], onA
           onClick={handlePlayPause}
           disabled={totalTracks === 0}
           title={isPlaying ? '暂停' : '播放'}
-          className="flex items-center justify-center w-7 h-7 rounded-full bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-700 disabled:cursor-not-allowed transition"
+          style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            width: 28, height: 28, borderRadius: '50%', border: 'none',
+            background: totalTracks === 0 ? 'var(--bg-card)' : 'var(--accent)',
+            color: '#fff', cursor: totalTracks === 0 ? 'not-allowed' : 'pointer',
+            opacity: totalTracks === 0 ? 0.4 : 1,
+            boxShadow: totalTracks > 0 ? '0 0 10px var(--accent-glow)' : 'none',
+            transition: 'all 0.15s',
+          }}
         >
           {isPlaying ? (
-            <svg className="w-3.5 h-3.5 text-white" fill="currentColor" viewBox="0 0 24 24">
+            <svg width="12" height="12" fill="currentColor" viewBox="0 0 24 24">
               <rect x="6" y="4" width="4" height="16" rx="1" />
               <rect x="14" y="4" width="4" height="16" rx="1" />
             </svg>
           ) : (
-            <svg className="w-3.5 h-3.5 text-white" fill="currentColor" viewBox="0 0 24 24">
+            <svg width="12" height="12" fill="currentColor" viewBox="0 0 24 24">
               <polygon points="6,3 20,12 6,21" />
             </svg>
           )}
         </button>
 
         {/* Timecode */}
-        <span className="text-xs text-gray-400 font-mono tabular-nums w-10">
+        <span className="font-mono" style={{ fontSize: 12, color: 'var(--text-2)', minWidth: 40, tabularNums: true }}>
           {formatTime(playhead)}
         </span>
 
-        <div className="flex-1" />
+        <div style={{ flex: 1 }} />
 
-        {/* Upload action button */}
+        {/* Upload action */}
         <button
           onClick={() => actionFileInputRef.current?.click()}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-gray-800 hover:bg-gray-700 border border-gray-700/50 rounded-lg text-orange-400 hover:text-orange-300 transition"
+          style={{
+            display: 'flex', alignItems: 'center', gap: 6,
+            padding: '6px 12px', borderRadius: 8, fontSize: 11, fontWeight: 600,
+            background: 'var(--bg-card)', border: '1px solid var(--border)',
+            color: 'rgba(251,146,60,0.9)', cursor: 'pointer', fontFamily: 'inherit',
+            transition: 'all 0.15s',
+          }}
+          onMouseEnter={e => { e.currentTarget.style.borderColor = 'rgba(251,146,60,0.4)'; e.currentTarget.style.color = 'rgb(251,146,60)'; }}
+          onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.color = 'rgba(251,146,60,0.9)'; }}
         >
-          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
               d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
@@ -436,12 +469,20 @@ const MusicTimeline = forwardRef(function MusicTimeline({ actionTracks = [], onA
         </button>
         <input ref={actionFileInputRef} type="file" accept=".glb,.gltf,.fbx" className="hidden" onChange={handleActionUpload} />
 
-        {/* Upload music button */}
+        {/* Upload music */}
         <button
           onClick={() => fileInputRef.current?.click()}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-gray-800 hover:bg-gray-700 border border-gray-700/50 rounded-lg text-gray-300 hover:text-white transition"
+          style={{
+            display: 'flex', alignItems: 'center', gap: 6,
+            padding: '6px 12px', borderRadius: 8, fontSize: 11, fontWeight: 600,
+            background: 'var(--bg-card)', border: '1px solid var(--border)',
+            color: 'var(--text-2)', cursor: 'pointer', fontFamily: 'inherit',
+            transition: 'all 0.15s',
+          }}
+          onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--border-accent)'; e.currentTarget.style.color = 'var(--text-1)'; }}
+          onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.color = 'var(--text-2)'; }}
         >
-          <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
+          <svg width="12" height="12" fill="currentColor" viewBox="0 0 24 24">
             <path d="M9 19V6l12-3v13M9 19c0 1.1-1.34 2-3 2s-3-.9-3-2 1.34-2 3-2 3 .9 3 2zm12-3c0 1.1-1.34 2-3 2s-3-.9-3-2 1.34-2 3-2 3 .9 3 2z" />
           </svg>
           上传音乐
@@ -450,67 +491,43 @@ const MusicTimeline = forwardRef(function MusicTimeline({ actionTracks = [], onA
       </div>
 
       {/* Timeline scroll area */}
-      <div ref={timelineRef} className="overflow-x-auto">
+      <div ref={timelineRef} style={{ flex: 1, overflowX: 'auto', overflowY: 'auto' }}>
         <div style={{ width: RULER_OFFSET + TOTAL_SECS * PX_PER_SEC + 32, position: 'relative' }}>
 
           {/* Time ruler */}
           <div
-            className="h-6 border-b border-gray-800 relative cursor-crosshair select-none bg-gray-950/60"
+            style={{ height: 24, borderBottom: '1px solid var(--border)', position: 'relative', cursor: 'crosshair', userSelect: 'none', background: 'var(--bg-base)' }}
             onClick={onRulerClick}
           >
-            <div
-              style={{ width: RULER_OFFSET }}
-              className="absolute left-0 top-0 bottom-0 flex items-center px-3 border-r border-gray-800/60"
-            >
-              <span className="text-[10px] text-gray-600 uppercase tracking-wider">时间线</span>
+            <div style={{ width: RULER_OFFSET, position: 'absolute', left: 0, top: 0, bottom: 0, display: 'flex', alignItems: 'center', padding: '0 12px', borderRight: '1px solid var(--border)' }}>
+              <span style={{ fontSize: 9, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>时间线</span>
             </div>
             {MARKERS.map(s => (
-              <div
-                key={s}
-                style={{ position: 'absolute', left: RULER_OFFSET + s * PX_PER_SEC, top: 0, bottom: 0 }}
-                className="flex flex-col justify-end"
-              >
-                <div className="w-px h-2 bg-gray-700" />
-                <span className="text-[9px] text-gray-600 font-mono absolute top-1" style={{ left: 3 }}>
+              <div key={s} style={{ position: 'absolute', left: RULER_OFFSET + s * PX_PER_SEC, top: 0, bottom: 0, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end' }}>
+                <div style={{ width: 1, height: 8, background: 'var(--border)' }} />
+                <span className="font-mono" style={{ fontSize: 9, color: 'var(--text-3)', position: 'absolute', top: 4, left: 3 }}>
                   {s > 0 ? formatTime(s) : ''}
                 </span>
               </div>
             ))}
             {/* Playhead on ruler */}
-            <div
-              style={{ position: 'absolute', left: RULER_OFFSET + playhead * PX_PER_SEC, top: 0, bottom: 0 }}
-              className="w-px bg-red-500 pointer-events-none"
-            >
-              <div className="w-2 h-2 bg-red-500 rounded-full absolute -top-0.5 -left-[3px]" />
+            <div style={{ position: 'absolute', left: RULER_OFFSET + playhead * PX_PER_SEC, top: 0, bottom: 0, width: 1, background: '#ef4444', pointerEvents: 'none' }}>
+              <div style={{ width: 8, height: 8, background: '#ef4444', borderRadius: '50%', position: 'absolute', top: -2, left: -3.5 }} />
             </div>
           </div>
 
           {/* Track area */}
-          <div className="relative" style={{ height: timelineHeight }} onClick={() => setSelected(null)}>
+          <div style={{ position: 'relative', height: timelineHeight }} onClick={() => setSelected(null)}>
 
             {/* Playhead line across all tracks */}
-            <div
-              style={{ position: 'absolute', left: RULER_OFFSET + playhead * PX_PER_SEC, top: 0, bottom: 0 }}
-              className="w-px bg-red-500/50 z-10 pointer-events-none"
-            />
-
-            {/* Section divider: 动作 */}
-            {actionTracks.length > 0 && (
-              <div
-                style={{ position: 'absolute', left: 0, right: 0, top: 0 }}
-                className="h-px bg-orange-900/40"
-              />
-            )}
+            <div style={{ position: 'absolute', left: RULER_OFFSET + playhead * PX_PER_SEC, top: 0, bottom: 0, width: 1, background: 'rgba(239,68,68,0.4)', zIndex: 10, pointerEvents: 'none' }} />
 
             {/* Action tracks */}
             {actionTracks.map((track, idx) => (
-              <div
-                key={track.id}
-                style={{ position: 'absolute', top: idx * TRACK_H, left: 0, right: 0 }}
-              >
+              <div key={track.id} style={{ position: 'absolute', top: idx * TRACK_H, left: 0, right: 0 }}>
                 <TrackRow
                   track={track}
-                  colorClass={ACTION_COLORS[track.colorIdx % ACTION_COLORS.length]}
+                  color={ACTION_COLORS[track.colorIdx % ACTION_COLORS.length]}
                   onMouseDown={(e, id) => onClipMouseDown(e, id, 'action')}
                   onDelete={handleDeleteAction}
                   icon={ActionIcon}
@@ -522,21 +539,15 @@ const MusicTimeline = forwardRef(function MusicTimeline({ actionTracks = [], onA
 
             {/* Divider between action and music */}
             {actionTracks.length > 0 && musicTracks.length > 0 && (
-              <div
-                style={{ position: 'absolute', left: 0, right: 0, top: actionTracks.length * TRACK_H }}
-                className="h-px bg-gray-700/60"
-              />
+              <div style={{ position: 'absolute', left: 0, right: 0, top: actionTracks.length * TRACK_H, height: 1, background: 'var(--border)' }} />
             )}
 
             {/* Music tracks */}
             {musicTracks.map((track, idx) => (
-              <div
-                key={track.id}
-                style={{ position: 'absolute', top: actionTracks.length * TRACK_H + idx * TRACK_H, left: 0, right: 0 }}
-              >
+              <div key={track.id} style={{ position: 'absolute', top: actionTracks.length * TRACK_H + idx * TRACK_H, left: 0, right: 0 }}>
                 <TrackRow
                   track={track}
-                  colorClass={MUSIC_COLORS[track.colorIdx]}
+                  color={MUSIC_COLORS[track.colorIdx]}
                   onMouseDown={(e, id) => onClipMouseDown(e, id, 'music')}
                   onDelete={handleDeleteMusic}
                   icon={MusicIcon}
@@ -548,8 +559,8 @@ const MusicTimeline = forwardRef(function MusicTimeline({ actionTracks = [], onA
 
             {/* Empty hint */}
             {totalTracks === 0 && (
-              <div className="flex items-center h-full pl-4" style={{ paddingLeft: RULER_OFFSET + 8 }}>
-                <span className="text-xs text-gray-600">上传动作文件或音乐后将显示在此处，可拖动调整位置</span>
+              <div style={{ display: 'flex', alignItems: 'center', height: '100%', paddingLeft: RULER_OFFSET + 8 }}>
+                <span style={{ fontSize: 11, color: 'var(--text-3)' }}>上传动作文件或音乐后将显示在此处，可拖动调整位置</span>
               </div>
             )}
           </div>
